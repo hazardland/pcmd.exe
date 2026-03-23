@@ -10,7 +10,7 @@ Windows developers have always had a rough deal on the terminal front. Microsoft
 
 So the question became: why not build exactly what I need, nothing more?
 
-`cmd.exe` is not helpless. Microsoft added `↑` to browse history. They added Tab completion for the current folder. They were *this close*. But they never taught it to save history to a file on exit. They never added `cd ../` tab completion. They never added color to `dir`. Tiny things. Maddening things.
+`cmd.exe` is helpless. Microsoft added `↑` to browse history. They added Tab completion for the current folder. They were *this close*. But they never taught it to save history to a file on exit. They never added `cd ../` tab completion. They never added color to `dir`. Tiny things. Maddening things.
 
 What I was actually missing:
 
