@@ -253,9 +253,21 @@ struct editor {
 };
 
 // scan history backwards for an entry that starts with buf
+// for "cd <path>", hint from directory completions instead of history
 void find_hint(editor& e) {
     e.hint.clear();
     if (e.buf.empty() || e.hist_idx != -1) return;
+    std::wstring lower = e.buf;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::towlower);
+    if (lower == L"cd" || (lower.size() >= 3 && lower.substr(0, 3) == L"cd ")) {
+        if (lower.size() >= 3) {
+            std::wstring token = e.buf.substr(3);
+            auto matches = complete(token, true);
+            if (!matches.empty() && matches[0].size() > token.size())
+                e.hint = matches[0].substr(token.size());
+        }
+        return;
+    }
     for (int i = (int)e.hist.size() - 1; i >= 0; i--) {
         if (e.hist[i].size() > e.buf.size() &&
             e.hist[i].substr(0, e.buf.size()) == e.buf) {
@@ -441,6 +453,7 @@ std::string readline(editor& e) {
             std::wstring match = e.tab_matches[e.tab_idx];
             e.buf = e.tab_pre + match + e.tab_suf;
             e.pos = (int)(e.tab_pre.size() + match.size());
+            e.hint.clear();
             redraw(e);
             continue;
         }
@@ -657,7 +670,19 @@ int main() {
     SetConsoleCP(65001);
     SetConsoleOutputCP(65001);
 
-    out(GRAY "Power CMD v" VERSION RESET "\r\n");
+    out(
+        "\x1b[38;5;75m\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x84"                                                       // P: ███▄
+        "\x1b[38;5;226m \xe2\x96\x84\xe2\x96\x88\xe2\x96\x88 \xe2\x96\x88\xe2\x96\x84 \xe2\x96\x84\xe2\x96\x88 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x84\r\n"  // CMD:  ▄██ █▄ ▄█ ██▄
+        "\x1b[38;5;75m\xe2\x96\x88  \xe2\x96\x88"                                                                              // P: █  █
+        "\x1b[38;5;226m \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                  // CMD:  █   █ █ █ █ █
+        "\x1b[38;5;75m\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x80"                                                       // P: ███▀
+        "\x1b[38;5;226m \xe2\x96\x88   \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                             // CMD:  █   █   █ █ █
+        "\x1b[38;5;75m\xe2\x96\x88"                                                                                            // P: █
+        "\x1b[38;5;226m    \xe2\x96\x88   \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                          // CMD:     █   █   █ █ █
+        "\x1b[38;5;75m\xe2\x96\x88"                                                                                            // P: █
+        "\x1b[38;5;226m    \xe2\x96\x80\xe2\x96\x88\xe2\x96\x88 \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x80\r\n"  // CMD:     ▀██ █   █ ██▀
+        RESET GRAY "Power cmd v" VERSION RESET "\r\n"
+    );
 
     bool elev = elevated();
     editor e;

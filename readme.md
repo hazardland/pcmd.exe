@@ -1,6 +1,6 @@
-# Power CMD
+# 2026 UPDAE: pcmd.exe (Moved from batch files to single executable)
 
-<!-- screenshots coming soon -->
+![Power CMD demo](./images/pcmd_cdls.gif)
 
 ## Why
 
@@ -21,7 +21,7 @@ The answer was a **500 KB standalone executable, single `.cpp` file**, easy to c
 
 ```
 Windows Terminal
-└── shell.exe  (permanent process, entire session)
+└── pcmd.exe  (permanent process, entire session)
         │
         ├── built-ins handled directly in C++
         │   cd, ls, exit, history, auto-cd, prompt, hints...
@@ -32,7 +32,7 @@ Windows Terminal
                                         batch files, dir, echo, set, &&, ||...
 ```
 
-`shell.exe` owns the input loop and UX. `cmd.exe` is a temporary worker used for execution — you get full Windows command compatibility without `shell.exe` needing to reimplement any of it.
+`pcmd.exe` owns the input loop and UX. `cmd.exe` is a temporary worker used for execution — you get full Windows command compatibility without `pcmd.exe` needing to reimplement any of it.
 
 ## Features
 
@@ -75,11 +75,11 @@ Windows Terminal
 
 ### Windows Terminal
 
-Point your profile's command line directly at `shell.exe`:
+Point your profile's command line directly at `pcmd.exe`:
 
 ```json
 {
-    "commandline": "C:\\src\\powerline\\shell.exe",
+    "commandline": "C:\\src\\powerline\\pcmd.exe",
     "fontFace": "JetBrains Mono"
 }
 ```
@@ -89,23 +89,25 @@ Point your profile's command line directly at `shell.exe`:
 ```json
 {
     "terminal.integrated.profiles.windows": {
-        "Power CMD": {
-            "path": "C:\\src\\powerline\\shell.exe"
+        "pcmd": {
+            "path": [
+                "d:\\src\\powerline\\pcmd.exe"
+            ]
         }
     },
-    "terminal.integrated.defaultProfile.windows": "Power CMD"
+    "terminal.integrated.defaultProfile.windows": "pcmd"
 }
 ```
 
 ## Release
 
-The release is a single file: **`shell.exe`**. No runtime, no DLLs, no config files required. Built against the Windows SDK only.
+The release is a single file: **`pcmd.exe`**. No runtime, no DLLs, no config files required. Built against the Windows SDK only.
 
-Download the latest `shell-v0.0.X.zip` from the [Releases](../../releases) page, extract, and point your terminal profile at `shell.exe`.
+Download the latest `pcmd-v0.0.X.zip` from the [Releases](../../releases) page, extract, and point your terminal profile at `pcmd.exe`.
 
 To build from source:
 ```
-g++ shell.cpp -o shell.exe -DVERSION_MINOR=X -ladvapi32 -lshell32
+g++ pcmd.cpp -o pcmd.exe -DVERSION_MINOR=X -ladvapi32 -lshell32
 ```
 or just run `build.bat` which auto-increments the version.
 
@@ -113,7 +115,7 @@ or just run `build.bat` which auto-increments the version.
 
 # Batch Powerline (original)
 
-> The sections below cover the original batch-based powerline system. It still works independently and is not replaced by `shell.exe` — both coexist in the repo.
+> The sections below cover the original batch-based powerline system. It still works independently and is not replaced by `pcmd.exe` — both coexist in the repo.
 
 # Update
 

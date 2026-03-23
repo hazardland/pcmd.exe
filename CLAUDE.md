@@ -8,10 +8,10 @@
 
 ## Project Structure
 - **Batch system** (`init.bat`, `_set.bat`, `alias.bat`, etc.) — keep untouched, it is the stable base
-- **shell.cpp** — C++ alternative called "Power CMD", single file executable, lives in the same folder
-- Both systems are independent; shell.cpp does not replace the batch system
+- **pcmd.cpp** — C++ alternative called "Power CMD", single file executable, lives in the same folder
+- Both systems are independent; pcmd.cpp does not replace the batch system
 
-## C++ Conventions (shell.cpp)
+## C++ Conventions (pcmd.cpp)
 - `snake_case` for all variable names
 - Single word for function and variable names where there is no ambiguity
 - Single `.cpp` file, no external dependencies, Windows SDK only
@@ -32,4 +32,4 @@
 ## General
 - No breaking changes without checking with user first
 - Keep changes simple and focused — no over-engineering
-- Test by compiling to `shell2.exe` when `shell.exe` is running/locked
+- Test by compiling to `pcmd2.exe` when `pcmd.exe` is running/locked
