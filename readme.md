@@ -1,14 +1,21 @@
 # Power CMD
 
-A modern terminal shell for Windows — started as a batch script powerline prompt, evolved into a standalone C++ executable that runs directly as your shell.
-
 <!-- screenshots coming soon -->
 
-## From Batch to C++
+## Why
 
-The original approach (`init.bat`, `_set.bat`, `alias.bat`) worked by hooking into `cmd.exe` — customizing the prompt, wrapping commands with doskey macros. It had hard limits: blank Enter could never refresh the prompt, the timestamp had a leading-space bug on single-digit hours, and every prompt redraw spawned a `git.exe` process.
+Plain `cmd.exe` has been frustrating Windows developers for decades. Here is what finally pushed this project from batch scripts into a full C++ shell:
 
-`shell.exe` replaces the interactive layer entirely. It is not a child of `cmd.exe` — it *is* the shell. Windows Terminal points directly to `shell.exe` and talks to it the same way it would talk to `cmd.exe` or PowerShell.
+- **No tab completion for `cd`** — you could not tab-complete `../` or parent folder paths
+- **No persistent history** — every time you closed the terminal your command history was gone
+- **Multiline paste was broken** — pasting a curl command copied from Chrome (with `^` or `\` line continuations) sent each line separately and made cmd go nuts
+- **No history hinting** — no ghost text, no suggestions as you type, nothing
+- **Prompt could not refresh on Enter** — blank Enter in cmd does nothing, so the clock in the prompt would freeze and never update
+- **No colored `ls`** — `dir` exists but it is not `ls`, and it has no colors
+
+The batch-based powerline (`init.bat`, `_set.bat`) solved the prompt styling but hit a hard ceiling: it still ran *inside* cmd.exe and could not work around these fundamental limits.
+
+The answer was a **500 KB standalone executable, single `.cpp` file**, easy to compile, that runs *directly* as your shell — not as a child of cmd — while still delegating command execution to cmd so nothing breaks.
 
 ## Architecture
 
