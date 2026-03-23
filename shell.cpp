@@ -1,0 +1,472 @@
+#include <windows.h>
+#include <shlobj.h>
+#include <string>
+#include <algorithm>
+#include <vector>
+#include <cstdio>
+#include <cwctype>
+#include <fstream>
+
+#ifndef VERSION_MINOR
+#define VERSION_MINOR 0
+#endif
+#define STR_(x) #x
+#define STR(x) STR_(x)
+#define VERSION "0.0." STR(VERSION_MINOR)
+
+#define GRAY   "\x1b[38;5;240m"
+#define BLUE   "\x1b[38;5;75m"
+#define RED    "\x1b[38;5;203m"
+#define YELLOW "\x1b[38;5;229m"
+#define RESET  "\x1b[0m"
+
+static HANDLE out_h;
+static HANDLE err_h;
+static HANDLE in_h;
+static DWORD  orig_in_mode;
+
+// ---- string helpers ----
+
+std::string to_utf8(const std::wstring& ws) {
+    if (ws.empty()) return "";
+    int n = WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, NULL, 0, NULL, NULL);
+    std::string s(n - 1, 0);
+    WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, &s[0], n, NULL, NULL);
+    return s;
+}
+
+std::wstring to_wide(const std::string& s) {
+    if (s.empty()) return L"";
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, NULL, 0);
+    std::wstring ws(n - 1, 0);
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &ws[0], n);
+    return ws;
+}
+
+void out(const std::string& s) {
+    DWORD w;
+    WriteFile(out_h, s.c_str(), (DWORD)s.size(), &w, NULL);
+}
+
+void err(const std::string& s) {
+    DWORD w;
+    WriteFile(err_h, s.c_str(), (DWORD)s.size(), &w, NULL);
+}
+
+// ---- ctrl+c handler ----
+
+static volatile bool ctrl_c_fired = false;
+
+BOOL WINAPI ctrl_handler(DWORD type) {
+    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
+        ctrl_c_fired = true;
+        return TRUE; // suppress for our process, child still gets it
+    }
+    return FALSE;
+}
+
+// ---- shell info ----
+
+bool elevated() {
+    BOOL result = FALSE;
+    HANDLE token = NULL;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        TOKEN_ELEVATION e = {};
+        DWORD size = sizeof(e);
+        if (GetTokenInformation(token, TokenElevation, &e, sizeof(e), &size))
+            result = e.TokenIsElevated;
+        CloseHandle(token);
+    }
+    return result;
+}
+
+std::string cur_time() {
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%02d:%02d:%02d.%02d",
+        st.wHour, st.wMinute, st.wSecond, st.wMilliseconds / 10);
+    return buf;
+}
+
+std::string cwd() {
+    wchar_t buf[MAX_PATH];
+    GetCurrentDirectoryW(MAX_PATH, buf);
+    return to_utf8(buf);
+}
+
+std::string folder(const std::string& path) {
+    size_t pos = path.find_last_of("\\/");
+    if (pos == std::string::npos) return path;
+    std::string name = path.substr(pos + 1);
+    return name.empty() ? path.substr(0, pos) : name;
+}
+
+std::string branch() {
+    wchar_t dir[MAX_PATH];
+    GetCurrentDirectoryW(MAX_PATH, dir);
+    std::wstring path = dir;
+    while (!path.empty()) {
+        HANDLE f = CreateFileW((path + L"\\.git\\HEAD").c_str(),
+            GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL, NULL);
+        if (f != INVALID_HANDLE_VALUE) {
+            char buf[256] = {};
+            DWORD read = 0;
+            ReadFile(f, buf, sizeof(buf) - 1, &read, NULL);
+            CloseHandle(f);
+            std::string s(buf);
+            while (!s.empty() && (s.back() == '\n' || s.back() == '\r'))
+                s.pop_back();
+            const std::string ref = "ref: refs/heads/";
+            if (s.substr(0, ref.size()) == ref) return s.substr(ref.size());
+            if (s.size() >= 7) return s.substr(0, 7);
+            return s;
+        }
+        size_t sep = path.find_last_of(L"\\/");
+        if (sep == std::wstring::npos) break;
+        path = path.substr(0, sep);
+    }
+    return "";
+}
+
+bool dirty() {
+    HANDLE pipe_r = NULL, pipe_w = NULL;
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    if (!CreatePipe(&pipe_r, &pipe_w, &sa, 0)) return false;
+    SetHandleInformation(pipe_r, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOA si = {};
+    si.cb = sizeof(si);
+    si.dwFlags    = STARTF_USESTDHANDLES;
+    si.hStdOutput = pipe_w;
+    si.hStdError  = err_h;
+    si.hStdInput  = in_h;
+
+    PROCESS_INFORMATION pi = {};
+    char cmd[] = "git.exe status --porcelain";
+    bool ok = CreateProcessA(NULL, cmd, NULL, NULL, TRUE,
+        CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+    CloseHandle(pipe_w);
+    if (!ok) { CloseHandle(pipe_r); return false; }
+
+    char buf[4] = {};
+    DWORD n = 0;
+    bool has = ReadFile(pipe_r, buf, 1, &n, NULL) && n > 0;
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    CloseHandle(pipe_r);
+    return has;
+}
+
+// ---- prompt ----
+
+struct prompt_t {
+    std::string str; // full ANSI string
+    int vis;         // visual character width
+};
+
+prompt_t make_prompt(bool elev, const std::string& t, const std::string& f,
+                     const std::string& b, bool d) {
+    const char* color = elev ? RED : BLUE;
+    std::string s;
+    s += GRAY "["; s += t; s += "]";
+    s += color; s += f;
+    if (!b.empty()) {
+        s += RESET "[";
+        s += YELLOW; s += b;
+        if (d) s += "*";
+        s += RESET "]";
+    }
+    s += color; s += "> ";
+    s += RESET;
+
+    int vis = 2 + (int)t.size() + (int)f.size() + 2; // [time]folder> _
+    if (!b.empty()) vis += 1 + (int)b.size() + (d ? 1 : 0) + 1;
+    return { s, vis };
+}
+
+// ---- tab completion ----
+
+std::vector<std::wstring> complete(const std::wstring& prefix, bool dirs_only = false) {
+    std::vector<std::wstring> result;
+    std::wstring dir, name;
+    size_t sep = prefix.find_last_of(L"\\/");
+    if (sep == std::wstring::npos) { dir = L""; name = prefix; }
+    else { dir = prefix.substr(0, sep + 1); name = prefix.substr(sep + 1); }
+
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + name + L"*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return result;
+    do {
+        std::wstring fname = fd.cFileName;
+        if (fname == L"." || fname == L"..") continue;
+        bool is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        if (dirs_only && !is_dir) continue;
+        std::wstring full = dir + fname;
+        if (is_dir) full += L"/";
+        std::replace(full.begin(), full.end(), L'\\', L'/');
+        result.push_back(full);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+// ---- line editor ----
+
+struct editor {
+    std::wstring buf;
+    int pos = 0;
+    std::string prompt_str;
+    std::vector<std::wstring> hist;
+    int hist_idx  = -1;
+    std::wstring saved;       // saved line when browsing history
+
+    bool tab_on = false;
+    std::vector<std::wstring> tab_matches;
+    int tab_idx    = 0;
+    int tab_start  = 0;       // start of token being completed
+    std::wstring tab_pre;     // buf before the token
+    std::wstring tab_suf;     // buf after original cursor pos
+};
+
+void redraw(const editor& e) {
+    std::string buf_utf8 = to_utf8(e.buf);
+    int move_back = (int)e.buf.size() - e.pos;
+
+    std::string s;
+    s += "\x1b[u";      // restore cursor to saved position (start of input)
+    s += buf_utf8;
+    s += "\x1b[K";      // erase to end of line
+    if (move_back > 0) {
+        char esc[32];
+        snprintf(esc, sizeof(esc), "\x1b[%dD", move_back);
+        s += esc;
+    }
+    out(s);
+}
+
+std::string readline(editor& e) {
+    while (true) {
+        INPUT_RECORD ir;
+        DWORD count;
+        if (!ReadConsoleInputW(in_h, &ir, 1, &count)) break;
+        if (ir.EventType != KEY_EVENT || !ir.Event.KeyEvent.bKeyDown) continue;
+
+        WORD vk     = ir.Event.KeyEvent.wVirtualKeyCode;
+        wchar_t ch  = ir.Event.KeyEvent.uChar.UnicodeChar;
+        DWORD state = ir.Event.KeyEvent.dwControlKeyState;
+        bool ctrl   = (state & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+
+        if (vk != VK_TAB) e.tab_on = false;
+
+        if (vk == VK_RETURN) {
+            out("\r\n");
+            std::string line = to_utf8(e.buf);
+            if (!e.buf.empty()) e.hist.push_back(e.buf);
+            e.buf.clear();
+            e.pos      = 0;
+            e.hist_idx = -1;
+            return line;
+        }
+
+        if (vk == VK_BACK) {
+            if (e.pos > 0) { e.buf.erase(e.pos - 1, 1); e.pos--; redraw(e); }
+            continue;
+        }
+
+        if (vk == VK_DELETE) {
+            if (e.pos < (int)e.buf.size()) { e.buf.erase(e.pos, 1); redraw(e); }
+            continue;
+        }
+
+        if (vk == VK_LEFT)  { if (e.pos > 0)                    { e.pos--; redraw(e); } continue; }
+        if (vk == VK_RIGHT) { if (e.pos < (int)e.buf.size())    { e.pos++; redraw(e); } continue; }
+        if (vk == VK_HOME)  { e.pos = 0;                          redraw(e); continue; }
+        if (vk == VK_END)   { e.pos = (int)e.buf.size();          redraw(e); continue; }
+
+        if (vk == VK_UP) {
+            if (e.hist.empty()) continue;
+            if (e.hist_idx == -1) { e.saved = e.buf; e.hist_idx = (int)e.hist.size() - 1; }
+            else if (e.hist_idx > 0) e.hist_idx--;
+            e.buf = e.hist[e.hist_idx];
+            e.pos = (int)e.buf.size();
+            redraw(e);
+            continue;
+        }
+
+        if (vk == VK_DOWN) {
+            if (e.hist_idx == -1) continue;
+            if (e.hist_idx < (int)e.hist.size() - 1) { e.hist_idx++; e.buf = e.hist[e.hist_idx]; }
+            else { e.hist_idx = -1; e.buf = e.saved; }
+            e.pos = (int)e.buf.size();
+            redraw(e);
+            continue;
+        }
+
+        if (vk == VK_TAB) {
+            if (!e.tab_on) {
+                std::wstring before = e.buf.substr(0, e.pos);
+                size_t space = before.find_last_of(L" \t");
+                int start = (space == std::wstring::npos) ? 0 : (int)space + 1;
+                std::wstring token = before.substr(start);
+                std::wstring lower_buf = e.buf;
+                std::transform(lower_buf.begin(), lower_buf.end(), lower_buf.begin(), ::towlower);
+                bool dirs_only = (lower_buf.substr(0, 3) == L"cd " || lower_buf == L"cd");
+                e.tab_matches = complete(token, dirs_only);
+                if (e.tab_matches.empty()) continue;
+                e.tab_on    = true;
+                e.tab_idx   = 0;
+                e.tab_start = start;
+                e.tab_pre   = e.buf.substr(0, start);
+                e.tab_suf   = e.buf.substr(e.pos);
+            } else {
+                e.tab_idx = (e.tab_idx + 1) % (int)e.tab_matches.size();
+            }
+            std::wstring match = e.tab_matches[e.tab_idx];
+            e.buf = e.tab_pre + match + e.tab_suf;
+            e.pos = (int)(e.tab_pre.size() + match.size());
+            redraw(e);
+            continue;
+        }
+
+        if (vk == VK_ESCAPE) {
+            e.buf.clear(); e.pos = 0; redraw(e);
+            continue;
+        }
+
+        if (ctrl && vk == 'C') {
+            out("^C\r\n");
+            e.buf.clear(); e.pos = 0;
+            return "";
+        }
+
+        if (ch >= 32 && ch != 127) {
+            e.buf.insert(e.pos, 1, ch);
+            e.pos++;
+            redraw(e);
+        }
+    }
+    return "";
+}
+
+// ---- commands ----
+
+void cd(const std::string& line) {
+    std::string args = line.size() > 2 ? line.substr(3) : "";
+    // strip /d flag
+    if (args.size() >= 3 && args[0] == '/' && (args[1] == 'd' || args[1] == 'D') && args[2] == ' ')
+        args = args.substr(3);
+    while (!args.empty() && args.front() == ' ') args.erase(args.begin());
+    while (!args.empty() && args.back()  == ' ') args.pop_back();
+
+    if (args.empty()) { out(cwd() + "\r\n"); return; }
+
+    if (!SetCurrentDirectoryW(to_wide(args).c_str()))
+        err("The system cannot find the path specified.\r\n");
+}
+
+std::string history_path() {
+    wchar_t buf[MAX_PATH];
+    GetEnvironmentVariableW(L"USERPROFILE", buf, MAX_PATH);
+    return to_utf8(buf) + "\\.history";
+}
+
+void load_history(editor& e) {
+    std::ifstream f(history_path());
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty()) e.hist.push_back(to_wide(line));
+    }
+}
+
+void save_history(const editor& e, size_t loaded) {
+    std::ofstream f(history_path(), std::ios::app);
+    for (size_t i = loaded; i < e.hist.size(); i++)
+        f << to_utf8(e.hist[i]) << "\n";
+}
+
+int run(const std::string& line) {
+    std::string cmd = "cmd.exe /c " + line;
+    std::vector<char> buf(cmd.begin(), cmd.end());
+    buf.push_back(0);
+    STARTUPINFOA si = {}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessA(NULL, buf.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
+        return -1;
+    SetConsoleMode(in_h, orig_in_mode);  // restore so Ctrl+C reaches child
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    SetConsoleMode(in_h, ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT);  // back to raw
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return (int)code;
+}
+
+// ---- main ----
+
+int main() {
+    out_h = GetStdHandle(STD_OUTPUT_HANDLE);
+    err_h = GetStdHandle(STD_ERROR_HANDLE);
+    in_h  = GetStdHandle(STD_INPUT_HANDLE);
+    SetConsoleCtrlHandler(ctrl_handler, TRUE);
+
+    // enable ANSI
+    DWORD out_mode = 0;
+    GetConsoleMode(out_h, &out_mode);
+    SetConsoleMode(out_h, out_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+
+    // raw input: no line buffer, no echo, no processed ctrl
+    GetConsoleMode(in_h, &orig_in_mode);
+    SetConsoleMode(in_h, ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT);
+
+    SetConsoleCP(65001);
+    SetConsoleOutputCP(65001);
+
+    out(GRAY "Power CMD v" VERSION RESET "\r\n");
+
+    bool elev = elevated();
+    editor e;
+    load_history(e);
+    size_t loaded = e.hist.size();
+
+    while (true) {
+        std::string dir  = cwd();
+        std::string name = folder(dir);
+        std::string t    = cur_time();
+        std::string b    = branch();
+        bool d           = b.empty() ? false : dirty();
+
+        auto p = make_prompt(elev, t, name, b, d);
+        e.prompt_str = p.str;
+        out(p.str);
+        out("\x1b[s");  // save cursor (start of user input area)
+
+        std::string line = readline(e);
+
+        while (!line.empty() && line.front() == ' ') line.erase(line.begin());
+        while (!line.empty() && line.back()  == ' ') line.pop_back();
+
+        if (line.empty()) continue;
+
+        std::string lower = line;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+        if (lower == "exit") { save_history(e, loaded); break; }
+
+        if (lower == "cd" || lower.substr(0, 3) == "cd " ||
+            (lower.size() >= 6 && lower.substr(0, 6) == "cd /d ")) {
+            cd(line);
+            continue;
+        }
+
+        ctrl_c_fired = false;
+        run(line);
+        if (ctrl_c_fired) out("\r\n");
+    }
+
+    return 0;
+}
