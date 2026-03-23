@@ -722,12 +722,12 @@ void save_history(const editor& e, size_t loaded) {
 }
 
 int run(const std::string& line) {
-    std::string cmd = "cmd.exe /c " + line;
-    std::vector<char> buf(cmd.begin(), cmd.end());
+    std::wstring cmd = L"cmd.exe /c " + to_wide(line);
+    std::vector<wchar_t> buf(cmd.begin(), cmd.end());
     buf.push_back(0);
-    STARTUPINFOA si = {}; si.cb = sizeof(si);
+    STARTUPINFOW si = {}; si.cb = sizeof(si);
     PROCESS_INFORMATION pi = {};
-    if (!CreateProcessA(NULL, buf.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
+    if (!CreateProcessW(NULL, buf.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
         return -1;
     SetConsoleMode(in_h, orig_in_mode);  // restore so Ctrl+C reaches child
     WaitForSingleObject(pi.hProcess, INFINITE);
