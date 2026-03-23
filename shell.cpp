@@ -242,6 +242,7 @@ struct editor {
     std::vector<std::wstring> hist;
     int hist_idx  = -1;
     std::wstring saved;
+    std::wstring hint;        // gray ghost text suggestion from history
 
     bool tab_on = false;
     std::vector<std::wstring> tab_matches;
@@ -250,6 +251,19 @@ struct editor {
     std::wstring tab_pre;
     std::wstring tab_suf;
 };
+
+// scan history backwards for an entry that starts with buf
+void find_hint(editor& e) {
+    e.hint.clear();
+    if (e.buf.empty() || e.hist_idx != -1) return;
+    for (int i = (int)e.hist.size() - 1; i >= 0; i--) {
+        if (e.hist[i].size() > e.buf.size() &&
+            e.hist[i].substr(0, e.buf.size()) == e.buf) {
+            e.hint = e.hist[i].substr(e.buf.size());
+            return;
+        }
+    }
+}
 
 int term_width() {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
@@ -274,6 +288,15 @@ void redraw(editor& e) {
     s += "\x1b[J";       // clear to end of screen
     s += e.prompt_str;   // reprint prompt
     s += to_utf8(e.buf); // reprint buffer
+
+    // gray hint — cap to remaining cols on last line so it never wraps
+    if (!e.hint.empty()) {
+        int end_col = (e.prompt_vis + (int)e.buf.size()) % width;
+        int remaining = width - end_col;
+        std::wstring shown = e.hint.substr(0, std::min((int)e.hint.size(), remaining - 1));
+        if (!shown.empty())
+            s += GRAY + to_utf8(shown) + RESET;
+    }
 
     // position cursor at e.pos
     int end_row = (e.prompt_vis + (int)e.buf.size()) / width;
@@ -322,6 +345,7 @@ std::string readline(editor& e) {
                 out("\r\n\x1b[2K> "); // \x1b[2K clears the line (erases any "More?" ConHost may have echoed)
                 continue;
             }
+            e.hint.clear(); redraw(e); // clear ghost text before submitting
             out("\r\n");
             std::wstring full = e.full_cmd + e.buf;
             std::string line = to_utf8(full);
@@ -335,12 +359,12 @@ std::string readline(editor& e) {
         }
 
         if (vk == VK_BACK) {
-            if (e.pos > 0) { e.buf.erase(e.pos - 1, 1); e.pos--; redraw(e); }
+            if (e.pos > 0) { e.buf.erase(e.pos - 1, 1); e.pos--; find_hint(e); redraw(e); }
             continue;
         }
 
         if (vk == VK_DELETE) {
-            if (e.pos < (int)e.buf.size()) { e.buf.erase(e.pos, 1); redraw(e); }
+            if (e.pos < (int)e.buf.size()) { e.buf.erase(e.pos, 1); find_hint(e); redraw(e); }
             continue;
         }
 
@@ -355,18 +379,33 @@ std::string readline(editor& e) {
             if (ctrl) {
                 while (e.pos < (int)e.buf.size() && e.buf[e.pos] != L' ') e.pos++;
                 while (e.pos < (int)e.buf.size() && e.buf[e.pos] == L' ') e.pos++;
-            } else if (e.pos < (int)e.buf.size()) e.pos++;
+            } else if (e.pos < (int)e.buf.size()) {
+                e.pos++;
+            } else if (!e.hint.empty()) {
+                // accept hint
+                e.buf += e.hint;
+                e.pos = (int)e.buf.size();
+                e.hint.clear();
+            }
             redraw(e); continue;
         }
         if (vk == VK_HOME)  { e.pos = 0;                          redraw(e); continue; }
-        if (vk == VK_END)   { e.pos = (int)e.buf.size();          redraw(e); continue; }
+        if (vk == VK_END) {
+            if (e.pos == (int)e.buf.size() && !e.hint.empty()) {
+                // accept hint
+                e.buf += e.hint;
+                e.hint.clear();
+            }
+            e.pos = (int)e.buf.size();
+            redraw(e); continue;
+        }
 
         if (vk == VK_UP) {
             if (e.hist.empty()) continue;
             if (e.hist_idx == -1) { e.saved = e.buf; e.hist_idx = (int)e.hist.size() - 1; }
             else if (e.hist_idx > 0) e.hist_idx--;
             e.buf = e.hist[e.hist_idx];
-            e.pos = (int)e.buf.size();
+            e.pos = (int)e.buf.size(); e.hint.clear();
             redraw(e);
             continue;
         }
@@ -375,7 +414,7 @@ std::string readline(editor& e) {
             if (e.hist_idx == -1) continue;
             if (e.hist_idx < (int)e.hist.size() - 1) { e.hist_idx++; e.buf = e.hist[e.hist_idx]; }
             else { e.hist_idx = -1; e.buf = e.saved; }
-            e.pos = (int)e.buf.size();
+            e.pos = (int)e.buf.size(); e.hint.clear();
             redraw(e);
             continue;
         }
@@ -407,7 +446,7 @@ std::string readline(editor& e) {
         }
 
         if (vk == VK_ESCAPE) {
-            e.buf.clear(); e.pos = 0; redraw(e);
+            e.buf.clear(); e.pos = 0; e.hint.clear(); redraw(e);
             continue;
         }
 
@@ -422,6 +461,7 @@ std::string readline(editor& e) {
         if (ch >= 32 && ch != 127) {
             e.buf.insert(e.pos, 1, ch);
             e.pos++;
+            find_hint(e);
             redraw(e);
         }
     }
@@ -695,7 +735,7 @@ int main() {
         }
         ctrl_c_fired = false;
         last_code = run(line);
-        if (ctrl_c_fired) out("\r\n");
+        if (ctrl_c_fired) { out("\r\n"); last_code = 0; }
     }
 
     return 0;
