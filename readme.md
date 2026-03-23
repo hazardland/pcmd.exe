@@ -6,18 +6,24 @@
 
 ## Why
 
-Plain `cmd.exe` has been frustrating Windows developers for decades. Here is what finally pushed this project from batch scripts into a full C++ shell:
+Windows developers have always had a rough deal on the terminal front. Microsoft eventually got tired of `cmd.exe` too and pushed PowerShell — but PowerShell is an elephant. You can feel the startup latency in your chest before the first prompt even appears. The alternatives people reach for on Windows — [Nushell](https://www.nushell.sh/), [Fish for WSL](https://fishshell.com/), [Clink](https://chrisant996.github.io/clink/) — are either built on scripting runtimes that spawn cascades of child processes, require WSL, or bolt features onto cmd in ways that still feel bolted on. Fast fingers notice all of it.
 
-- **No tab completion for `cd`** — you could not tab-complete `../` or parent folder paths
-- **No persistent history** — every time you closed the terminal your command history was gone
-- **Multiline paste was broken** — pasting a curl command copied from Chrome (with `^` or `\` line continuations) sent each line separately and made cmd go nuts
-- **No history hinting** — no ghost text, no suggestions as you type, nothing
-- **Prompt could not refresh on Enter** — blank Enter in cmd does nothing, so the clock in the prompt would freeze and never update
-- **No colored `ls`** — `dir` exists but it is not `ls`, and it has no colors
+So the question became: why not build exactly what I need, nothing more?
 
-The batch-based powerline (`init.bat`, `_set.bat`) solved the prompt styling but hit a hard ceiling: it still ran *inside* cmd.exe and could not work around these fundamental limits.
+`cmd.exe` is not hopeless. Microsoft added `↑` to browse history. They added Tab completion for the current folder. They were *this close*. But they never taught it to save history to a file on exit. They never added `cd ../` tab completion. They never added color to `dir`. Tiny things. Maddening things.
 
-The answer was a **500 KB standalone executable, single `.cpp` file**, easy to compile, that runs *directly* as your shell — not as a child of cmd — while still delegating command execution to cmd so nothing breaks.
+What I was actually missing:
+
+- **Colored `ls`** — the jewel of the whole project. Seeing folders in blue, executables in green, archives in red, the same way CentOS does it — it genuinely warms my heart every time
+- **History that persists** — close the window, open it again, your history is still there
+- **History hints** — gray ghost text as you type, filtered `↑`/`↓` that only shows commands matching what you started typing
+- **Folder tab completion** — `cd ../pr` + Tab and it just works, including parent paths
+- **`cd -`** — jump back to where you were, like every Linux shell takes for granted
+- **Elapsed time** — always want to know how long that build or install actually took
+- **`pwd`, `which`** — small tools that should just exist
+- **Multiline paste** — pasting a curl command from Chrome without the terminal losing its mind
+
+Built it from scratch in C++ with the help of Claude. Single file, no dependencies, Windows SDK only. The process was surprisingly dopamine-driven — each feature was a small, satisfying puzzle: *what is the next useful thing I can add without stealing a millisecond of startup time?* That constraint kept everything honest.
 
 ## Architecture
 
