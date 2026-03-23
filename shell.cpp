@@ -218,6 +218,7 @@ std::vector<std::wstring> complete(const std::wstring& prefix, bool dirs_only = 
 
 struct editor {
     std::wstring buf;
+    std::wstring full_cmd;    // accumulated command across ^ continuations
     int pos        = 0;
     int prev_pos   = 0;       // cursor pos after last redraw (for relative movement)
     int prompt_vis = 0;
@@ -291,10 +292,26 @@ std::string readline(editor& e) {
         if (vk != VK_TAB) e.tab_on = false;
 
         if (vk == VK_RETURN) {
+            // cmd-style line continuation: ^ at end of line
+            std::wstring trimmed = e.buf;
+            while (!trimmed.empty() && trimmed.back() == L' ') trimmed.pop_back();
+            if (!trimmed.empty() && trimmed.back() == L'^') {
+                // commit this segment into full_cmd, start fresh visual line
+                e.full_cmd += trimmed.substr(0, trimmed.size() - 1);
+                e.buf.clear();
+                e.pos        = 0;
+                e.prev_pos   = 0;
+                e.prompt_str = "> ";
+                e.prompt_vis = 2;
+                out("\r\n\x1b[2K> "); // \x1b[2K clears the line (erases any "More?" ConHost may have echoed)
+                continue;
+            }
             out("\r\n");
-            std::string line = to_utf8(e.buf);
-            if (!e.buf.empty()) e.hist.push_back(e.buf);
+            std::wstring full = e.full_cmd + e.buf;
+            std::string line = to_utf8(full);
+            if (!full.empty()) e.hist.push_back(full);
             e.buf.clear();
+            e.full_cmd.clear();
             e.pos      = 0;
             e.hist_idx = -1;
             return line;
@@ -379,7 +396,9 @@ std::string readline(editor& e) {
 
         if (ctrl && vk == 'C') {
             out("^C\r\n");
-            e.buf.clear(); e.pos = 0;
+            e.buf.clear();
+            e.full_cmd.clear();
+            e.pos = 0;
             return "";
         }
 
@@ -480,10 +499,18 @@ int main() {
         std::string b    = branch();
         bool d           = b.empty() ? false : dirty();
 
+        // if cursor is not at column 0, previous output had no trailing newline
+        {
+            CONSOLE_SCREEN_BUFFER_INFO csbi;
+            if (GetConsoleScreenBufferInfo(out_h, &csbi) && csbi.dwCursorPosition.X > 0)
+                out("\r\n");
+        }
+
         auto p = make_prompt(elev, t, name, b, d);
         e.prompt_str  = p.str;
         e.prompt_vis  = p.vis;
         e.prev_pos    = 0;
+        e.full_cmd.clear();
         out(p.str);
 
         std::string line = readline(e);
