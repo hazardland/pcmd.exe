@@ -1,3 +1,113 @@
+# Power CMD
+
+A modern terminal shell for Windows — started as a batch script powerline prompt, evolved into a standalone C++ executable that runs directly as your shell.
+
+<!-- screenshots coming soon -->
+
+## From Batch to C++
+
+The original approach (`init.bat`, `_set.bat`, `alias.bat`) worked by hooking into `cmd.exe` — customizing the prompt, wrapping commands with doskey macros. It had hard limits: blank Enter could never refresh the prompt, the timestamp had a leading-space bug on single-digit hours, and every prompt redraw spawned a `git.exe` process.
+
+`shell.exe` replaces the interactive layer entirely. It is not a child of `cmd.exe` — it *is* the shell. Windows Terminal points directly to `shell.exe` and talks to it the same way it would talk to `cmd.exe` or PowerShell.
+
+## Architecture
+
+```
+Windows Terminal
+└── shell.exe  (permanent process, entire session)
+        │
+        ├── built-ins handled directly in C++
+        │   cd, ls, exit, history, auto-cd, prompt, hints...
+        │
+        └── everything else → cmd.exe /c <command>  (spawned per command, exits when done)
+                                    │
+                                    └── piping, redirection, %VAR% expansion,
+                                        batch files, dir, echo, set, &&, ||...
+```
+
+`shell.exe` owns the input loop and UX. `cmd.exe` is a temporary worker used for execution — you get full Windows command compatibility without `shell.exe` needing to reimplement any of it.
+
+## Features
+
+**Prompt**
+- `[time]folder[branch*]>` format with 256-color ANSI
+- Git branch and dirty status (reads `.git/HEAD` directly — no process spawn)
+- Exit code shown in red `[1]` when last command failed
+- Red folder color when running elevated (admin)
+- Window title shows folder name at rest, command name while running
+- Prompt never appears mid-line — detects partial output and adds newline automatically
+
+**Input**
+- Full line editing with cursor movement
+- `Ctrl+Left` / `Ctrl+Right` — word jump
+- `Home` / `End` — line start/end
+- `Ctrl+C` — cancel current input or interrupt running command
+- History hints — gray ghost text from history as you type, `→` or `End` to accept
+- Tab completion — files and directories, dirs-only after `cd`
+- Forward slashes in completion paths
+- Multiline paste — `^` and `\` line continuation, each segment shown with `>` prompt
+
+**History**
+- Persistent across sessions (`%USERPROFILE%\.history`)
+- Saved on `exit`, window close, logoff, and shutdown
+- No consecutive duplicates saved
+- `Up` / `Down` to navigate
+
+**Built-in commands**
+- `ls` — colored directory listing (dirs blue, executables green, archives red, images magenta, audio/video cyan, hidden gray)
+- `cd` — with `/d` flag support
+- Auto-cd — type a directory path and Enter, no `cd` needed
+- `cd ~` and `~` in paths expand to `%USERPROFILE%`
+
+**Execution**
+- Blank Enter refreshes the prompt (impossible in pure batch)
+- Ctrl+C correctly stops child processes
+- New prompt appears after every command automatically
+
+## Setup
+
+### Windows Terminal
+
+Point your profile's command line directly at `shell.exe`:
+
+```json
+{
+    "commandline": "C:\\src\\powerline\\shell.exe",
+    "fontFace": "JetBrains Mono"
+}
+```
+
+### VSCode
+
+```json
+{
+    "terminal.integrated.profiles.windows": {
+        "Power CMD": {
+            "path": "C:\\src\\powerline\\shell.exe"
+        }
+    },
+    "terminal.integrated.defaultProfile.windows": "Power CMD"
+}
+```
+
+## Release
+
+The release is a single file: **`shell.exe`**. No runtime, no DLLs, no config files required. Built against the Windows SDK only.
+
+Download the latest `shell-v0.0.X.zip` from the [Releases](../../releases) page, extract, and point your terminal profile at `shell.exe`.
+
+To build from source:
+```
+g++ shell.cpp -o shell.exe -DVERSION_MINOR=X -ladvapi32 -lshell32
+```
+or just run `build.bat` which auto-increments the version.
+
+---
+
+# Batch Powerline (original)
+
+> The sections below cover the original batch-based powerline system. It still works independently and is not replaced by `shell.exe` — both coexist in the repo.
+
 # Update
 
 ![alt text](./images/powerline_v2.png)
