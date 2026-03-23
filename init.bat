@@ -5,4 +5,5 @@
         set POWERLINE_DIR=%~dp0
         doskey git=%POWERLINE_DIR%\_git.bat $*
         doskey cd=%POWERLINE_DIR%\_cd.bat $*
+        doskey ls=%POWERLINE_DIR%\_ls.bat $*
         %POWERLINE_DIR%\_set.bat

@@ -4,10 +4,25 @@ for %%a in ("%CD%") do set "PARENT_FOLDER=%%~nxa"
 title %PARENT_FOLDER%
 
 set GITBRANCH=
-for /f %%I in ('git.exe branch --show-current 2^> NUL') do set GITBRANCH=%%I
+set GITSTATUS=
+for /f "tokens=1,* delims= " %%I in ('git.exe status -sb 2^>NUL') do (
+    if "%%I"=="##" (
+        for /f "tokens=1 delims=." %%K in ("%%J") do set "GITBRANCH=%%K"
+    ) else (
+        set "GITSTATUS=*"
+    )
+)
 
-if "%GITBRANCH%" == "" (
-    prompt $E[38;5;75m%PARENT_FOLDER%$G$E[0m$S
+if "%ELEVATED%" == "" (
+    if "%GITBRANCH%" == "" (
+        prompt $E[38;5;75m%PARENT_FOLDER%$G$E[0m$S
+    ) else (
+        prompt $E[38;5;75m%PARENT_FOLDER%$E[0m[$E[38;5;229m%GITBRANCH%%GITSTATUS%$E[0m]$G$S
+    )
 ) else (
-    prompt $E[38;5;75m%PARENT_FOLDER%$E[0m[$E[38;5;229m%GITBRANCH%$E[0m]$G$S
+    if "%GITBRANCH%" == "" (
+        prompt $E[38;5;203m%PARENT_FOLDER%$G$E[0m$S
+    ) else (
+        prompt $E[38;5;203m%PARENT_FOLDER%$E[0m[$E[38;5;229m%GITBRANCH%%GITSTATUS%$E[0m]$G$S
+    )
 )
