@@ -288,8 +288,8 @@ struct editor {
 };
 
 // Calculates the ghost hint for the current buf in edit mode (hist_idx == -1).
-// For "cd <path>" uses filesystem completions (dirs only); for everything else scans history
-// backwards so the most recent matching command wins. Clears hint if no match found.
+// For "cd <path>" uses filesystem completions (dirs only); for "ls <path>" files+dirs;
+// for everything else scans history backwards so the most recent matching command wins.
 void find_hint(editor& e) {
     e.hint.clear();
     if (e.buf.empty() || e.hist_idx != -1) return;
@@ -302,6 +302,13 @@ void find_hint(editor& e) {
             if (!matches.empty() && matches[0].size() > token.size())
                 e.hint = matches[0].substr(token.size());
         }
+        return;
+    }
+    if (lower.size() >= 3 && lower.substr(0, 3) == L"ls ") {
+        std::wstring token = e.buf.substr(3);
+        auto matches = complete(token, true);
+        if (!matches.empty() && matches[0].size() > token.size())
+            e.hint = matches[0].substr(token.size());
         return;
     }
     for (int i = (int)e.hist.size() - 1; i >= 0; i--) {
@@ -535,6 +542,7 @@ std::string readline(editor& e) {
         // -- Tab: cycle filesystem completions --
         // First Tab computes all matches for the token under the cursor and stores pre/suf so
         // the rest of the line is preserved. Each subsequent Tab advances to the next match.
+        // Auto-dive: if the only match is a directory, the next Tab re-initializes inside it.
         if (vk == VK_TAB) {
             if (!e.tab_on) {
                 std::wstring before = e.buf.substr(0, e.pos);
@@ -543,7 +551,8 @@ std::string readline(editor& e) {
                 std::wstring token = before.substr(start);
                 std::wstring lower_buf = e.buf;
                 std::transform(lower_buf.begin(), lower_buf.end(), lower_buf.begin(), ::towlower);
-                bool dirs_only = (lower_buf.substr(0, 3) == L"cd " || lower_buf == L"cd");
+                bool dirs_only = (lower_buf.substr(0, 3) == L"cd " || lower_buf == L"cd" ||
+                                  lower_buf.substr(0, 3) == L"ls " || lower_buf == L"ls");
                 e.tab_matches = complete(token, dirs_only);
                 if (e.tab_matches.empty()) continue;
                 e.tab_on    = true;
@@ -552,7 +561,29 @@ std::string readline(editor& e) {
                 e.tab_pre   = e.buf.substr(0, start);
                 e.tab_suf   = e.buf.substr(e.pos);
             } else {
-                e.tab_idx = (e.tab_idx + 1) % (int)e.tab_matches.size();
+                std::wstring cur = e.tab_matches[e.tab_idx];
+                // auto-dive: single dir match — re-initialize completion inside it
+                if (e.tab_matches.size() == 1 && !cur.empty() && cur.back() == L'/') {
+                    std::wstring lower_buf = e.buf;
+                    std::transform(lower_buf.begin(), lower_buf.end(), lower_buf.begin(), ::towlower);
+                    bool dirs_only = (lower_buf.substr(0, 3) == L"cd " || lower_buf == L"cd" ||
+                                      lower_buf.substr(0, 3) == L"ls " || lower_buf == L"ls");
+                    std::wstring new_token = e.tab_pre + cur;
+                    // new_token relative to command (strip the command prefix stored in tab_pre up to space)
+                    size_t space = new_token.find_last_of(L" \t");
+                    std::wstring path_token = (space == std::wstring::npos) ? new_token : new_token.substr(space + 1);
+                    auto matches = complete(path_token, dirs_only);
+                    if (!matches.empty()) {
+                        e.tab_matches = matches;
+                        e.tab_idx     = 0;
+                        e.tab_pre     = (space == std::wstring::npos) ? L"" : new_token.substr(0, space + 1);
+                        e.tab_suf     = L"";
+                    } else {
+                        e.tab_idx = 0; // stay on current match, nothing inside
+                    }
+                } else {
+                    e.tab_idx = (e.tab_idx + 1) % (int)e.tab_matches.size();
+                }
             }
             std::wstring match = e.tab_matches[e.tab_idx];
             e.buf = e.tab_pre + match + e.tab_suf;
@@ -888,7 +919,7 @@ int run(const std::string& line) {
 int which(const std::string& arg) {
     std::string argl = arg;
     std::transform(argl.begin(), argl.end(), argl.begin(), ::tolower);
-    static const std::vector<std::string> builtins = {"ls","cd","pwd","exit","which","help"
+    static const std::vector<std::string> builtins = {"ls","cd","pwd","exit","which","help","version"
 #ifdef DEMO
         ,"demo"
 #endif
@@ -911,6 +942,8 @@ int which(const std::string& arg) {
     std::stringstream ps(path_env);
     std::string dir;
     while (std::getline(ps, dir, ';')) {
+        if (dir.size() >= 2 && dir.front() == '"' && dir.back() == '"')
+            dir = dir.substr(1, dir.size() - 2);
         if (!dir.empty() && dir.back() != '\\') dir += '\\';
         for (auto& e : exts) {
             std::string full = dir + arg + e;
@@ -1009,7 +1042,8 @@ int main() {
 
         if (lower == "help") {
             out(
-                GREEN "pwd" RESET "    Print current directory\r\n"
+                GREEN "version" RESET " Print pcmd version\r\n"
+                GREEN "pwd" RESET "     Print current directory\r\n"
                 GREEN "ls" RESET "     Colored listing  -a all  -s by size  -t by time  -l long  -r reverse  | grep <word>\r\n"
                 GREEN "cd" RESET "     Change directory  ~ home  - prev dir\r\n"
                 GREEN "which" RESET "  Locate a command in PATH or identify built-ins\r\n"
@@ -1017,6 +1051,12 @@ int main() {
                 GREEN "exit" RESET "   Exit pcmd\r\n"
                 GRAY "All other commands are passed to cmd.exe" RESET "\r\n"
             );
+            last_code = 0;
+            continue;
+        }
+
+        if (lower == "version") {
+            out("pcmd v" VERSION "\r\n");
             last_code = 0;
             continue;
         }

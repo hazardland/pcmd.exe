@@ -1,8 +1,7 @@
 # Powerline / Power CMD — Dev Rules
 
 ## Git
-- Always work on a **separate branch**, never touch `master` or `minimal` directly
-- Current working branch: `claude`
+- Never commit directly to `master` — always create a new branch when starting work
 - Only commit when explicitly asked by the user
 - Never delete files without permission
 
@@ -42,7 +41,7 @@
 ## General
 - No breaking changes without checking with user first
 - Keep changes simple and focused — no over-engineering
-- We `pcmd.exe` is running/locked we can to kill pcmd.exe process but build.bat already includes that flow
+- `build.bat` kills any running `pcmd.exe` before building, so no manual process kill needed
 
 ## Postponed ideas
 - **Tab-complete executables from PATH** — postponed: mixing PATH executables with local folder contents in Tab completion is ambiguous and confusing. Tab is for folder/file navigation only.
@@ -67,8 +66,8 @@ Triggered automatically on every keystroke and delete.
 
 - Scans history **backwards** for the most recent entry that **starts with** buf.
 - Shows the suffix as **gray text** after the cursor.
-- For `cd <path>`: hint comes from **directory completions**, not history.
-- For `cd` alone: no hint shown.
+- For `cd <path>` and `ls <path>`: hint comes from **directory completions**, not history.
+- For `cd` or `ls` alone: no hint shown.
 
 ### Accepting the hint
 
@@ -109,9 +108,10 @@ Triggered automatically on every keystroke and delete.
 ## Tab completion (always independent)
 
 - Completes files and directories at the current path prefix.
-- After `cd`: directories only.
+- After `cd` or `ls`: directories only, no files mixed in.
 - Repeated Tab cycles through all matches.
-- Tab always clears `hint` before rendering.
+- Auto-dive: if the only match is a directory (ends with `/`), the next Tab re-initializes completion inside it instead of cycling.
+- Tab always clears `hint` before rendering. Tab never reads or accepts the hint — Right/End do that.
 - Tab does not affect `hist_idx`, `saved`, or `plain_nav`.
 
 ## Key reference

@@ -17,7 +17,7 @@ What I was actually missing:
 - **Colored `ls`** — the jewel of the whole project. Seeing folders in blue, executables in green, archives in red, the same way CentOS does it — it genuinely warms my heart every time
 - **History that persists** — close the window, open it again, your history is still there
 - **History hints** — gray ghost text as you type, filtered `↑`/`↓` that only shows commands matching what you started typing
-- **Folder tab completion** — `cd ../pr` + Tab and it just works, including parent paths
+- **Folder tab completion** — `cd ../pr` + Tab and it just works, including parent paths; `ls` gets the same hints and tab cycling
 - **`cd -`** — jump back to where you were, like every Linux shell takes for granted
 - **Elapsed time** — always want to know how long that build or install actually took
 - **`pwd`, `which`** — small tools that should just exist
@@ -32,7 +32,7 @@ Windows Terminal
 └── pcmd.exe  (permanent process, entire session)
         │
         ├── built-ins handled directly in C++
-        │   cd, ls, pwd, which, help, auto-cd, hints...
+        │   cd, ls, pwd, which, version, help, auto-cd, hints...
         │
         └── everything else → cmd.exe /c <command>  (spawned per command, exits when done)
                                     │
@@ -71,15 +71,37 @@ Windows Terminal
 
 **Tab completion**
 - Completes files and directories from the current path
-- After `cd` — directories only, no files mixed in
+- After `cd` or `ls` — directories only, no files mixed in
 - Repeated Tab cycles through all matches
-- Tab clears ghost hint before rendering
+- Auto-dive — if the only match is a directory, the next Tab steps inside it and starts cycling its contents
+- Tab and hint are independent — Tab never accepts the hint, Right/End do that
 
 **Built-in commands**
-- `ls` — colored listing: dirs blue, executables green, archives red, images magenta, audio/video cyan, hidden gray
+
+`ls [flags] [path] [| grep <word>]` — colored directory listing
+
+| Flag | Effect |
+|------|--------|
+| `-a` | show hidden files (gray) |
+| `-l` | long format: size + time columns, sorted alphabetically |
+| `-s` | sort by size descending, show size column |
+| `-t` | sort by time descending, show time column (`yyyy-mm-dd HH:MM:SS`) |
+| `-r` | reverse sort order (global, combines with any flag) |
+
+Flags combine freely: `ls -al`, `ls -tr`, `ls -lt`, `ls -a -s -r`. When both `-s` and `-t` are given, the first one sets the sort (`-st` sorts by size, `-ts` by time). `-l` alone shows both columns without changing sort order. Directories always sort above files within each group.
+
+`ls | grep <word>` / `ls | findstr <word>` — filter results by name (case-insensitive substring). Combines with flags: `ls -tr | grep cpp`.
+
+`ls --help` — full flag reference.
+
+Colors: dirs blue · executables green · archives red · images magenta · audio/video cyan · hidden gray
+
+---
+
 - `cd <dir>` — with `/d` flag, `~` for home, `-` for previous directory
 - `pwd` — print current directory with forward slashes
 - `which <cmd>` — locate a command in PATH, or identify pcmd built-ins
+- `version` — print current pcmd version
 - `help` — list all built-in commands
 - Auto-cd — type a directory path and press Enter, no `cd` needed
 
