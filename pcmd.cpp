@@ -1,5 +1,4 @@
 #include <windows.h>
-#include <shlobj.h>
 #include <string>
 #include <algorithm>
 #include <vector>
@@ -216,8 +215,8 @@ prompt_t make_prompt(bool elev, const std::string& t, const std::string& f,
         if (d) s += "*";
         s += RESET "]";
     }
-    if (code != 0) {
-        std::string cs = std::to_string(code);
+    std::string cs = code != 0 ? std::to_string(code) : "";
+    if (!cs.empty()) {
         s += RED "["; s += cs; s += "]";
         s += color;
     }
@@ -226,7 +225,7 @@ prompt_t make_prompt(bool elev, const std::string& t, const std::string& f,
 
     int vis = 2 + (int)t.size() + (int)f.size() + 2;
     if (!b.empty()) vis += 1 + (int)b.size() + (d ? 1 : 0) + 1;
-    if (code != 0) vis += 1 + (int)std::to_string(code).size() + 1;
+    if (!cs.empty()) vis += 1 + (int)cs.size() + 1;
     return { s, vis };
 }
 
@@ -366,6 +365,33 @@ void redraw(editor& e) {
     e.prev_pos = e.pos;
 }
 
+// Advances history navigation one step in direction dir (-1 = UP, +1 = DOWN).
+// In filtered mode (saved non-empty) searches for the next entry starting with saved;
+// falls back to plain cycle if no match exists. Shared by VK_UP and VK_DOWN handlers.
+static void nav_step(editor& e, int dir) {
+    int n = (int)e.hist.size();
+    int start = ((e.hist_idx + dir) % n + n) % n;
+    if (e.saved.empty()) {
+        e.hist_idx = start;
+        e.buf = e.hist[e.hist_idx]; e.hint.clear();
+    } else {
+        int found = -1;
+        for (int i = 0; i < n; i++) {
+            int idx = ((e.hist_idx + dir * (1 + i)) % n + n) % n;
+            if (e.hist[idx].substr(0, e.saved.size()) == e.saved) { found = idx; break; }
+        }
+        if (found == -1) {
+            e.hist_idx = start; e.buf = e.hist[e.hist_idx]; e.hint.clear();
+        } else {
+            e.hist_idx = found;
+            e.buf  = e.saved;
+            e.hint = e.hist[found].substr(e.saved.size());
+        }
+    }
+    e.pos = (int)e.buf.size();
+    redraw(e);
+}
+
 // Raw input loop: reads INPUT_RECORDs one at a time (key-down only) and drives the full
 // editor state machine — history navigation, hint accept, tab completion, cursor movement,
 // line continuation, Ctrl+C. Calls redraw after every state change. Returns the completed
@@ -467,64 +493,24 @@ std::string readline(editor& e) {
 
         if (vk == VK_UP) {
             if (e.hist.empty()) continue;
-            if (e.hist_idx == -1) { e.saved = e.plain_nav ? L"" : e.buf; e.hist_idx = (int)e.hist.size(); }
-            {
-                int n = (int)e.hist.size();
-                int start = (e.hist_idx - 1 + n) % n;  // wrap around
-                if (e.saved.empty()) {
-                    // plain cycle — wrap around, full text in buf
-                    e.hist_idx = start;
-                    e.buf = e.hist[e.hist_idx]; e.hint.clear();
-                } else {
-                    // prefix-filtered with wrap-around
-                    int found = -1;
-                    for (int i = 0; i < n; i++) {
-                        int idx = (e.hist_idx - 1 - i + n) % n;
-                        if (e.hist[idx].substr(0, e.saved.size()) == e.saved) { found = idx; break; }
-                    }
-                    if (found == -1) {
-                        // no matches at all — plain cycle
-                        e.hist_idx = start; e.buf = e.hist[e.hist_idx]; e.hint.clear();
-                    } else {
-                        e.hist_idx = found;
-                        e.buf  = e.saved;
-                        e.hint = e.hist[found].substr(e.saved.size());
-                    }
+            if (e.hist_idx == -1) {
+                e.saved = e.plain_nav ? L"" : e.buf;
+                e.hist_idx = (int)e.hist.size();
+                // If hint already shows a history entry, start from that entry so the
+                // first UP moves to the next match instead of re-showing the same one.
+                if (!e.hint.empty() && !e.saved.empty()) {
+                    std::wstring full = e.buf + e.hint;
+                    for (int i = (int)e.hist.size() - 1; i >= 0; i--)
+                        if (e.hist[i] == full) { e.hist_idx = i; break; }
                 }
             }
-            e.pos = (int)e.buf.size();
-            redraw(e);
+            nav_step(e, -1);
             continue;
         }
 
         if (vk == VK_DOWN) {
             if (e.hist_idx == -1) continue;
-            {
-                int n = (int)e.hist.size();
-                int start = (e.hist_idx + 1) % n;  // wrap around
-                if (e.saved.empty()) {
-                    // plain cycle — wrap around, full text in buf
-                    e.hist_idx = start;
-                    e.buf = e.hist[e.hist_idx]; e.hint.clear();
-                } else {
-                    // prefix-filtered with wrap-around
-                    int found = -1;
-                    for (int i = 0; i < n; i++) {
-                        int idx = (e.hist_idx + 1 + i) % n;
-                        if (e.hist[idx].substr(0, e.saved.size()) == e.saved) { found = idx; break; }
-                    }
-                    if (found == -1) {
-                        // no matches at all — plain cycle
-                        e.hist_idx = start; e.buf = e.hist[e.hist_idx]; e.hint.clear();
-                    } else {
-                        e.hist_idx = found;
-                        e.buf  = e.saved;
-                        e.hint = e.hist[found].substr(e.saved.size());
-                    }
-                }
-            }
-            e.pos = (int)e.buf.size();
-            redraw(e);
+            nav_step(e, +1);
             continue;
         }
 
@@ -793,6 +779,47 @@ int run(const std::string& line) {
 #include "pcmd_demo.cpp"
 #endif
 
+// Searches for arg as a built-in or executable in PATH; prints result and returns exit code (0=found, 1=not found).
+int do_which(const std::string& arg) {
+    std::string argl = arg;
+    std::transform(argl.begin(), argl.end(), argl.begin(), ::tolower);
+    static const std::vector<std::string> builtins = {"ls","cd","pwd","exit","which","help"
+#ifdef DEMO
+        ,"demo"
+#endif
+    };
+    for (auto& b : builtins) {
+        if (argl == b) { out(arg + ": pcmd built-in\r\n"); return 0; }
+    }
+    std::vector<std::string> exts;
+    char pathext[4096] = {};
+    GetEnvironmentVariableA("PATHEXT", pathext, sizeof(pathext));
+    std::stringstream pe(pathext);
+    std::string ext;
+    while (std::getline(pe, ext, ';')) {
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        exts.push_back(ext);
+    }
+    if (exts.empty()) exts = {".exe",".cmd",".bat",".com"};
+    char path_env[32768] = {};
+    GetEnvironmentVariableA("PATH", path_env, sizeof(path_env));
+    std::stringstream ps(path_env);
+    std::string dir;
+    while (std::getline(ps, dir, ';')) {
+        if (!dir.empty() && dir.back() != '\\') dir += '\\';
+        for (auto& e : exts) {
+            std::string full = dir + arg + e;
+            if (GetFileAttributesA(full.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                std::replace(full.begin(), full.end(), '\\', '/');
+                out(full + "\r\n");
+                return 0;
+            }
+        }
+    }
+    out(arg + ": not found\r\n");
+    return 1;
+}
+
 // ---- main ----
 
 int main() {
@@ -897,49 +924,7 @@ int main() {
         if (lower.size() >= 6 && lower.substr(0, 6) == "which ") {
             std::string arg = line.substr(6);
             while (!arg.empty() && arg.front() == ' ') arg.erase(arg.begin());
-            std::string argl = arg;
-            std::transform(argl.begin(), argl.end(), argl.begin(), ::tolower);
-            static const std::vector<std::string> builtins = {"ls","cd","pwd","exit","which","help"
-#ifdef DEMO
-                ,"demo"
-#endif
-            };
-            bool found = false;
-            for (auto& b : builtins) {
-                if (argl == b) { out(arg + ": pcmd built-in\r\n"); found = true; break; }
-            }
-            if (!found) {
-                // get PATHEXT extensions
-                std::vector<std::string> exts;
-                char pathext[4096] = {};
-                GetEnvironmentVariableA("PATHEXT", pathext, sizeof(pathext));
-                std::stringstream pe(pathext);
-                std::string ext;
-                while (std::getline(pe, ext, ';')) {
-                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    exts.push_back(ext);
-                }
-                if (exts.empty()) exts = {".exe",".cmd",".bat",".com"};
-                // search PATH
-                char path_env[32768] = {};
-                GetEnvironmentVariableA("PATH", path_env, sizeof(path_env));
-                std::stringstream ps(path_env);
-                std::string dir;
-                while (std::getline(ps, dir, ';') && !found) {
-                    if (!dir.empty() && dir.back() != '\\') dir += '\\';
-                    for (auto& e : exts) {
-                        std::string full = dir + arg + e;
-                        if (GetFileAttributesA(full.c_str()) != INVALID_FILE_ATTRIBUTES) {
-                            std::replace(full.begin(), full.end(), '\\', '/');
-                            out(full + "\r\n");
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (!found) out(arg + ": not found\r\n");
-            last_code = found ? 0 : 1;
+            last_code = do_which(arg);
             continue;
         }
 
