@@ -672,14 +672,14 @@ static std::string ls_color(const WIN32_FIND_DATAW& fd) {
     return "";
 }
 
-// Lists a directory with ANSI colors in a column-major grid; directories first (sorted),
-// then files (sorted). Column width is the longest entry + 2; column count fits terminal width.
-// Lists a directory with ANSI colors. Flags: -a show hidden, -s size, -t time, -l size+time.
-// -s or -t or -l switches to one-column mode. filter (from | grep / | findstr) is a
-// case-insensitive name substring applied after all other filtering.
+// Lists a directory with ANSI colors. Flags (all combinable, order of -s/-t sets sort priority):
+//   -a  show hidden files   -s  sort by size desc + show size   -t  sort by time desc + show time
+//   -l  show size + time (sort alphabetical unless -s or -t also present)   -r  reverse sort (global)
+// Any of -s/-t/-l switches to one-column mode. filter (| grep / | findstr) is case-insensitive name substring.
 void ls(const std::string& arg, const std::string& filter = "") {
-    // -- parse flags (-a, -s, -t, -l, combined e.g. -al), then path --
-    bool show_all = false, show_size = false, show_time = false;
+    // -- collect all flag chars left-to-right across all -xxx tokens, then path --
+    bool show_all = false, show_size = false, show_time = false, reverse = false;
+    char sort_by = 0; // 0=alpha, 's'=size, 't'=time; first -s or -t wins
     std::string path_s = arg;
     while (!path_s.empty() && path_s.front() == ' ') path_s.erase(path_s.begin());
     while (!path_s.empty() && path_s[0] == '-') {
@@ -687,9 +687,10 @@ void ls(const std::string& arg, const std::string& filter = "") {
         std::string tok = sp == std::string::npos ? path_s : path_s.substr(0, sp);
         for (char c : tok.substr(1)) {
             if (c == 'a') show_all  = true;
-            if (c == 's') show_size = true;
-            if (c == 't') show_time = true;
+            if (c == 'r') reverse   = true;
             if (c == 'l') { show_size = true; show_time = true; }
+            if (c == 's') { show_size = true; if (!sort_by) sort_by = 's'; }
+            if (c == 't') { show_time = true; if (!sort_by) sort_by = 't'; }
         }
         path_s = sp == std::string::npos ? "" : path_s.substr(sp + 1);
         while (!path_s.empty() && path_s.front() == ' ') path_s.erase(path_s.begin());
@@ -712,24 +713,36 @@ void ls(const std::string& arg, const std::string& filter = "") {
         if (hidden && !show_all) continue;
         bool is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         ULONGLONG sz = is_dir ? 0 : (((ULONGLONG)fd.nFileSizeHigh << 32) | fd.nFileSizeLow);
-        entry e = { name, is_dir, ls_color(fd), sz, fd.ftLastWriteTime };
-        (is_dir ? dirs : files).push_back(e);
+        (is_dir ? dirs : files).push_back({ name, is_dir, ls_color(fd), sz, fd.ftLastWriteTime });
     } while (FindNextFileW(h, &fd));
     FindClose(h);
 
-    auto cmp = [](const entry& a, const entry& b) {
+    // -- sort each group independently, dirs always above files --
+    auto alpha = [](const entry& a, const entry& b) {
         std::wstring la = a.name, lb = b.name;
         std::transform(la.begin(), la.end(), la.begin(), ::towlower);
         std::transform(lb.begin(), lb.end(), lb.begin(), ::towlower);
         return la < lb;
     };
-    std::sort(dirs.begin(), dirs.end(), cmp);
-    std::sort(files.begin(), files.end(), cmp);
+    auto by_size = [](const entry& a, const entry& b) { return a.size > b.size; };
+    auto by_time = [](const entry& a, const entry& b) {
+        return CompareFileTime(&a.mtime, &b.mtime) > 0;
+    };
+
+    auto sort_group = [&](std::vector<entry>& g) {
+        if      (sort_by == 's') std::sort(g.begin(), g.end(), by_size);
+        else if (sort_by == 't') std::sort(g.begin(), g.end(), by_time);
+        else                     std::sort(g.begin(), g.end(), alpha);
+        if (reverse) std::reverse(g.begin(), g.end());
+    };
+    sort_group(dirs);
+    sort_group(files);
 
     std::vector<entry> all;
     all.insert(all.end(), dirs.begin(), dirs.end());
     all.insert(all.end(), files.begin(), files.end());
 
+    // -- filter --
     if (!filter.empty()) {
         std::wstring wfl = to_wide(filter);
         std::transform(wfl.begin(), wfl.end(), wfl.begin(), ::towlower);
@@ -776,10 +789,10 @@ void ls(const std::string& arg, const std::string& filter = "") {
 
     // human-readable size: "42", "1.2K", "3.4M", "1.1G"
     auto fmt_size = [](ULONGLONG b) -> std::string {
-        if (b < 1024ULL)                  return std::to_string(b);
-        if (b < 1024ULL * 1024)           { char s[16]; snprintf(s, sizeof(s), "%.1fK", b / 1024.0);               return s; }
-        if (b < 1024ULL * 1024 * 1024)    { char s[16]; snprintf(s, sizeof(s), "%.1fM", b / (1024.0*1024));        return s; }
-                                            { char s[16]; snprintf(s, sizeof(s), "%.1fG", b / (1024.0*1024*1024));  return s; }
+        if (b < 1024ULL)               return std::to_string(b);
+        if (b < 1024ULL * 1024)        { char s[16]; snprintf(s, sizeof(s), "%.1fK", b / 1024.0);              return s; }
+        if (b < 1024ULL * 1024 * 1024) { char s[16]; snprintf(s, sizeof(s), "%.1fM", b / (1024.0*1024));       return s; }
+                                         { char s[16]; snprintf(s, sizeof(s), "%.1fG", b / (1024.0*1024*1024)); return s; }
     };
 
     // modification time as "yyyy-mm-dd HH:MM:SS" in local time
@@ -805,14 +818,11 @@ void ls(const std::string& arg, const std::string& filter = "") {
         row += name;
         if (!e.color.empty()) row += RESET;
         row += std::string(max_w - (int)name.size() + 2, ' ');
-
         if (show_size) {
             std::string sz = e.is_dir ? "" : fmt_size(e.size);
             row += std::string(std::max(0, 6 - (int)sz.size()), ' ') + sz + "  ";
         }
-        if (show_time) {
-            row += GRAY + fmt_time(e.mtime) + RESET;
-        }
+        if (show_time) row += GRAY + fmt_time(e.mtime) + RESET;
         out(row + "\r\n");
     }
 }
@@ -1000,7 +1010,7 @@ int main() {
         if (lower == "help") {
             out(
                 GREEN "pwd" RESET "    Print current directory\r\n"
-                GREEN "ls" RESET "     Colored listing  -a all  -s size  -t time  -l long  | grep <word>\r\n"
+                GREEN "ls" RESET "     Colored listing  -a all  -s by size  -t by time  -l long  -r reverse  | grep <word>\r\n"
                 GREEN "cd" RESET "     Change directory  ~ home  - prev dir\r\n"
                 GREEN "which" RESET "  Locate a command in PATH or identify built-ins\r\n"
                 GREEN "help" RESET "   Show this help\r\n"
@@ -1026,6 +1036,29 @@ int main() {
 
         // ls [path] | grep <word>  or  ls [path] | findstr <word>
         // Intercept before passing to cmd.exe so the built-in ls output is filterable.
+        if (lower == "ls --help") {
+            out(
+                GREEN "ls" RESET " [flags] [path] [| grep <word>]\r\n"
+                "\r\n"
+                "Flags\r\n"
+                "  " GREEN "-a" RESET "  show hidden files\r\n"
+                "  " GREEN "-l" RESET "  long format: size + time, sorted alphabetically\r\n"
+                "  " GREEN "-s" RESET "  sort by size descending, show size\r\n"
+                "  " GREEN "-t" RESET "  sort by time descending, show time\r\n"
+                "  " GREEN "-r" RESET "  reverse sort order (global, works with any flag)\r\n"
+                "\r\n"
+                "Flags combine freely: " GRAY "-al  -tr  -st  -trl  -a -l -r" RESET "\r\n"
+                "When both -s and -t are given, first one sets sort: " GRAY "-st" RESET " sorts by size, " GRAY "-ts" RESET " by time\r\n"
+                "-l alone shows size + time columns without changing sort order\r\n"
+                "\r\n"
+                "Pipe filter\r\n"
+                "  " GRAY "ls | grep <word>     case-insensitive name filter, combinable with flags\r\n"
+                "  ls -tr | grep cpp   newest-first, only names containing \"cpp\"" RESET "\r\n"
+            );
+            last_code = 0;
+            continue;
+        }
+
         if (lower == "ls" || (lower.size() >= 3 && lower.substr(0, 3) == "ls ")) {
             std::string rest = line.size() >= 3 ? line.substr(3) : "";
             std::string filter;
