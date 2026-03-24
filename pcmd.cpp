@@ -23,13 +23,16 @@
 #define GREEN  "\x1b[38;5;114m"  // executables (ls color guide)
 #define RESET  "\x1b[0m"
 
+// Console handles initialised once in main and used by all I/O functions.
 static HANDLE out_h;
 static HANDLE err_h;
 static HANDLE in_h;
+// Saved input mode; restored before spawning child processes so they receive normal input handling.
 static DWORD  orig_in_mode;
 
 // ---- string helpers ----
 
+// Convert wide string to UTF-8; used when writing wstring data to the console or history file.
 std::string to_utf8(const std::wstring& ws) {
     if (ws.empty()) return "";
     int n = WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), -1, NULL, 0, NULL, NULL);
@@ -38,6 +41,7 @@ std::string to_utf8(const std::wstring& ws) {
     return s;
 }
 
+// Convert UTF-8 string to wide; used before any Win32 API call that requires a wchar_t path or command.
 std::wstring to_wide(const std::string& s) {
     if (s.empty()) return L"";
     int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, NULL, 0);
@@ -46,11 +50,13 @@ std::wstring to_wide(const std::string& s) {
     return ws;
 }
 
+// Write UTF-8 bytes directly to stdout handle; bypasses C runtime buffering so ANSI sequences render immediately.
 void out(const std::string& s) {
     DWORD w;
     WriteFile(out_h, s.c_str(), (DWORD)s.size(), &w, NULL);
 }
 
+// Write to stderr handle; used for error messages that should not mix with stdout output.
 void err(const std::string& s) {
     DWORD w;
     WriteFile(err_h, s.c_str(), (DWORD)s.size(), &w, NULL);
@@ -58,14 +64,18 @@ void err(const std::string& s) {
 
 // ---- ctrl+c handler ----
 
+// Set to true by ctrl_handler on Ctrl+C; checked after child exits to suppress exit-code display and emit a newline.
 static volatile bool ctrl_c_fired = false;
 
 // forward declarations so ctrl_handler can save history on close/shutdown
 struct editor;
 void save_history(const editor&, size_t);
+// Globals so ctrl_handler (which has no parameters) can reach the live editor state on unexpected exit.
 static editor* g_editor  = nullptr;
 static size_t  g_loaded  = 0;
 
+// Ctrl+C/Break: set flag and suppress for our process (child still receives the signal).
+// Close/Logoff/Shutdown: flush history to disk then let Windows terminate us.
 BOOL WINAPI ctrl_handler(DWORD type) {
     if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
         ctrl_c_fired = true;
@@ -80,6 +90,7 @@ BOOL WINAPI ctrl_handler(DWORD type) {
 
 // ---- shell info ----
 
+// Returns true if the process has admin elevation; used to switch prompt color from blue to red.
 bool elevated() {
     BOOL result = FALSE;
     HANDLE token = NULL;
@@ -93,6 +104,7 @@ bool elevated() {
     return result;
 }
 
+// Returns the current local time as "HH:MM:SS.cs" (centiseconds) for the prompt timestamp.
 std::string cur_time() {
     SYSTEMTIME st;
     GetLocalTime(&st);
@@ -102,6 +114,7 @@ std::string cur_time() {
     return buf;
 }
 
+// Returns the current directory with all backslashes replaced by forward slashes.
 std::string cwd() {
     wchar_t buf[MAX_PATH];
     GetCurrentDirectoryW(MAX_PATH, buf);
@@ -110,6 +123,7 @@ std::string cwd() {
     return s;
 }
 
+// Extracts the last path component for display in the prompt; handles trailing slash by returning the component before it.
 std::string folder(const std::string& path) {
     size_t pos = path.find_last_of("\\/");
     if (pos == std::string::npos) return path;
@@ -117,6 +131,8 @@ std::string folder(const std::string& path) {
     return name.empty() ? path.substr(0, pos) : name;
 }
 
+// Walks up from cwd looking for .git/HEAD to find the current branch name.
+// Returns the branch name, a 7-char SHA for detached HEAD, or empty string if not in a git repo.
 std::string branch() {
     wchar_t dir[MAX_PATH];
     GetCurrentDirectoryW(MAX_PATH, dir);
@@ -145,6 +161,8 @@ std::string branch() {
     return "";
 }
 
+// Spawns "git status --porcelain" in a hidden window and reads one byte from its output.
+// Returns true if any output exists (repo is dirty); kept fast by not reading the full output.
 bool dirty() {
     HANDLE pipe_r = NULL, pipe_w = NULL;
     SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
@@ -177,11 +195,15 @@ bool dirty() {
 
 // ---- prompt ----
 
+// Prompt string paired with its visual width (ANSI escape codes excluded).
+// vis is needed by redraw to correctly compute screen column positions.
 struct prompt_t {
     std::string str; // full ANSI string
-    int vis;         // visual character width
+    int vis;         // printable character count (no escape codes)
 };
 
+// Builds the "[time]folder[branch*][exitcode]> " prompt and computes vis in one pass.
+// Exit code segment is omitted when code == 0; branch segment omitted when b is empty.
 prompt_t make_prompt(bool elev, const std::string& t, const std::string& f,
                      const std::string& b, bool d, int code) {
     const char* color = elev ? RED : BLUE;
@@ -210,6 +232,8 @@ prompt_t make_prompt(bool elev, const std::string& t, const std::string& f,
 
 // ---- tab completion ----
 
+// Returns filesystem entries matching prefix* sorted alphabetically; appends "/" to directories.
+// dirs_only is set true when completing after "cd" so files are excluded.
 std::vector<std::wstring> complete(const std::wstring& prefix, bool dirs_only = false) {
     std::vector<std::wstring> result;
     std::wstring dir, name;
@@ -237,29 +261,33 @@ std::vector<std::wstring> complete(const std::wstring& prefix, bool dirs_only = 
 
 // ---- line editor ----
 
+// All mutable state for one input session. hist persists across prompts; all other
+// fields are reset after each Enter so each new line starts clean.
 struct editor {
-    std::wstring buf;
-    std::wstring full_cmd;    // accumulated command across ^ continuations
-    int pos        = 0;
-    int prev_pos   = 0;       // cursor pos after last redraw (for relative movement)
-    int prompt_vis = 0;
-    std::string prompt_str;
-    std::vector<std::wstring> hist;
-    int hist_idx  = -1;
-    std::wstring saved;
-    bool plain_nav = false;   // after accepting hint, travel full history without filtering
-    std::wstring hint;        // gray ghost text suggestion from history
+    std::wstring buf;           // what the user has typed; the only thing that gets executed
+    std::wstring full_cmd;      // segments accumulated across ^ line continuations; prepended to buf on final Enter
+    int pos        = 0;         // cursor position within buf (not screen column)
+    int prev_pos   = 0;         // buf position as of last redraw; used to compute how many rows to move up
+    int prompt_vis = 0;         // visual width of prompt_str (no ANSI codes); needed for screen-column math
+    std::string prompt_str;     // stored so redraw can reprint it without recomputing
 
-    bool tab_on = false;
-    std::vector<std::wstring> tab_matches;
-    int tab_idx   = 0;
-    int tab_start = 0;
-    std::wstring tab_pre;
-    std::wstring tab_suf;
+    std::vector<std::wstring> hist; // history list oldest-first; deduplicated so each command appears once
+    int hist_idx  = -1;         // -1 = edit mode; >= 0 = index into hist during UP/DOWN navigation
+    std::wstring saved;         // snapshot of buf taken when UP is first pressed; prefix filter for navigation; empty = plain (unfiltered)
+    bool plain_nav = false;     // set true after accepting a hint with →/End so the next UP ignores buf as filter
+    std::wstring hint;          // gray ghost suffix after cursor; in nav mode it holds the suffix of the matching history entry
+
+    bool tab_on = false;                    // true while Tab is being cycled; any non-Tab key resets this
+    std::vector<std::wstring> tab_matches;  // all completions found on first Tab press
+    int tab_idx   = 0;                      // which completion is currently shown
+    int tab_start = 0;                      // start offset of the token being completed within buf
+    std::wstring tab_pre;                   // buf content before the completion token; preserved across cycles
+    std::wstring tab_suf;                   // buf content after cursor at Tab-press time; reappended each cycle
 };
 
-// scan history backwards for an entry that starts with buf
-// for "cd <path>", hint from directory completions instead of history
+// Calculates the ghost hint for the current buf in edit mode (hist_idx == -1).
+// For "cd <path>" uses filesystem completions (dirs only); for everything else scans history
+// backwards so the most recent matching command wins. Clears hint if no match found.
 void find_hint(editor& e) {
     e.hint.clear();
     if (e.buf.empty() || e.hist_idx != -1) return;
@@ -283,6 +311,7 @@ void find_hint(editor& e) {
     }
 }
 
+// Returns the visible column count of the terminal window; falls back to 80 if not a real console.
 int term_width() {
     CONSOLE_SCREEN_BUFFER_INFO csbi;
     if (GetConsoleScreenBufferInfo(out_h, &csbi))
@@ -290,6 +319,9 @@ int term_width() {
     return 80;
 }
 
+// Redraws the entire input line in place: moves up to the prompt row using prev_pos (where the
+// cursor actually is), clears to end of screen, reprints prompt + buf + gray hint, then
+// repositions the cursor at e.pos. Batches all output into one write to avoid flicker.
 void redraw(editor& e) {
     int width   = term_width();
     // cur_row: how many rows below the prompt start the cursor currently sits
@@ -334,6 +366,10 @@ void redraw(editor& e) {
     e.prev_pos = e.pos;
 }
 
+// Raw input loop: reads INPUT_RECORDs one at a time (key-down only) and drives the full
+// editor state machine — history navigation, hint accept, tab completion, cursor movement,
+// line continuation, Ctrl+C. Calls redraw after every state change. Returns the completed
+// command on Enter (with nav hint auto-accepted), or empty string on Ctrl+C.
 std::string readline(editor& e) {
     while (true) {
         INPUT_RECORD ir;
@@ -546,8 +582,11 @@ std::string readline(editor& e) {
 
 // ---- commands ----
 
+// Last directory before a successful cd; enables "cd -" to jump back.
 static std::string prev_dir;
 
+// Built-in cd: strips the /d compatibility flag, expands ~ to USERPROFILE, resolves "-" to
+// prev_dir, then calls SetCurrentDirectory. Updates prev_dir only on success.
 void cd(const std::string& line) {
     std::string args = line.size() > 2 ? line.substr(3) : "";
     // strip /d flag
@@ -578,6 +617,8 @@ void cd(const std::string& line) {
         prev_dir = before;
 }
 
+// Maps a directory entry to its ANSI color escape: hidden→gray, dir→blue, exe→green,
+// archive→bold red, image→bold magenta, audio/video→cyan, everything else→empty (default).
 static std::string ls_color(const WIN32_FIND_DATAW& fd) {
     bool is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
     bool hidden = (fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
@@ -617,6 +658,8 @@ static std::string ls_color(const WIN32_FIND_DATAW& fd) {
     return "";
 }
 
+// Lists a directory with ANSI colors in a column-major grid; directories first (sorted),
+// then files (sorted). Column width is the longest entry + 2; column count fits terminal width.
 void do_ls(const std::string& arg) {
     std::string path_s = arg;
     while (!path_s.empty() && path_s.front() == ' ') path_s.erase(path_s.begin());
@@ -693,12 +736,15 @@ void do_ls(const std::string& arg) {
     }
 }
 
+// Returns the path to the persistent history file: %USERPROFILE%\.history.
 std::string history_path() {
     wchar_t buf[MAX_PATH];
     GetEnvironmentVariableW(L"USERPROFILE", buf, MAX_PATH);
     return to_utf8(buf) + "\\.history";
 }
 
+// Reads .history into e.hist and deduplicates, keeping only the last occurrence of each
+// command so the most recently used entry wins during UP navigation.
 void load_history(editor& e) {
     std::ifstream f(history_path());
     std::string line;
@@ -715,12 +761,16 @@ void load_history(editor& e) {
     std::reverse(e.hist.begin(), e.hist.end());
 }
 
+// Appends only the commands added this session (index >= loaded) to avoid rewriting
+// the whole file; the file grows append-only and is deduplicated on next load.
 void save_history(const editor& e, size_t loaded) {
     std::ofstream f(history_path(), std::ios::app);
     for (size_t i = loaded; i < e.hist.size(); i++)
         f << to_utf8(e.hist[i]) << "\n";
 }
 
+// Spawns "cmd.exe /c <line>" and waits for it to finish. Temporarily restores orig_in_mode
+// so Ctrl+C reaches the child, then re-enables raw mode afterward. Returns the child's exit code.
 int run(const std::string& line) {
     std::wstring cmd = L"cmd.exe /c " + to_wide(line);
     std::vector<wchar_t> buf(cmd.begin(), cmd.end());
@@ -738,6 +788,10 @@ int run(const std::string& line) {
     CloseHandle(pi.hThread);
     return (int)code;
 }
+
+#ifdef DEMO
+#include "pcmd_demo.cpp"
+#endif
 
 // ---- main ----
 
@@ -816,6 +870,10 @@ int main() {
 
         if (lower == "exit") { save_history(e, loaded); break; }
 
+#ifdef DEMO
+        if (lower == "demo") { demo_run(e); last_code = 0; continue; }
+#endif
+
         if (lower == "help") {
             out(
                 GREEN "pwd" RESET "    Print current directory\r\n"
@@ -841,7 +899,11 @@ int main() {
             while (!arg.empty() && arg.front() == ' ') arg.erase(arg.begin());
             std::string argl = arg;
             std::transform(argl.begin(), argl.end(), argl.begin(), ::tolower);
-            static const std::vector<std::string> builtins = {"ls","cd","pwd","exit","which","help"};
+            static const std::vector<std::string> builtins = {"ls","cd","pwd","exit","which","help"
+#ifdef DEMO
+                ,"demo"
+#endif
+            };
             bool found = false;
             for (auto& b : builtins) {
                 if (argl == b) { out(arg + ": pcmd built-in\r\n"); found = true; break; }
