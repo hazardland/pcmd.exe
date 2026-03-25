@@ -98,7 +98,7 @@ Colors: dirs blue · executables green · archives red · images magenta · audi
 
 ---
 
-`cat [path] [| grep <word>]` — print file contents with syntax highlighting
+`cat [path] [| grep <word>]` — print file contents with syntax highlighting; renders images inline
 
 | Extension | Language |
 |-----------|----------|
@@ -118,6 +118,10 @@ Colors: dirs blue · executables green · archives red · images magenta · audi
 | `.html` `.htm` `.xml` `.svg` | HTML / XML |
 
 `cat file.cpp | grep <word>` — print only lines containing word (case-insensitive).
+
+**Image rendering** — `cat` detects image extensions (`.jpg` `.jpeg` `.png` `.bmp` `.gif` `.tga` `.psd`) and renders them directly in the terminal using 24-bit color and Unicode quadrant-block characters (`▀▄▌▐` etc.). The image is scaled to fit the terminal width and height, preserving aspect ratio. Requires a terminal with true-color and Unicode support (Windows Terminal works great).
+
+**Video playback** — `cat` also plays video files (`.mp4` `.mkv` `.avi` `.mov` `.webm` `.flv` `.wmv`) directly in the terminal using the same block-art renderer. Frames are piped from ffmpeg at 24 fps and scaled to fit the terminal. Press `Esc` or `Ctrl+C` to stop. Requires [ffmpeg](https://ffmpeg.org) to be installed and on PATH.
 
 ---
 
