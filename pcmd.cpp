@@ -1014,6 +1014,32 @@ int run(const std::string& line) {
     return (int)code;
 }
 
+// Runs line through sh.exe (Git-for-Windows) instead of cmd.exe.
+// Escapes any " in the command so it can be wrapped in sh -c "...".
+// Falls back to run() if sh.exe is not found in PATH.
+int run_bash(const std::string& line) {
+    std::wstring escaped;
+    for (unsigned char c : line) {
+        if (c == '"') { escaped += L'\\'; escaped += L'"'; }
+        else escaped += (wchar_t)c;
+    }
+    std::wstring cmd = L"sh.exe -c \"" + escaped + L"\"";
+    std::vector<wchar_t> buf(cmd.begin(), cmd.end());
+    buf.push_back(0);
+    STARTUPINFOW si = {}; si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(NULL, buf.data(), NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
+        return run(line);
+    SetConsoleMode(in_h, orig_in_mode);
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    SetConsoleMode(in_h, ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT);
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return (int)code;
+}
+
 // Searches for arg as a built-in or executable in PATH; prints result and returns exit code (0=found, 1=not found).
 int which(const std::string& arg) {
     std::string argl = arg;
@@ -1604,7 +1630,9 @@ int main() {
         }
         ctrl_c_fired = false;
         ULONGLONG t_start = GetTickCount64();
-        last_code = run(line);
+        bool bash_curl = lower.size() >= 5 && lower.substr(0, 5) == "curl " &&
+                         line.find('\'') != std::string::npos;
+        last_code = bash_curl ? run_bash(line) : run(line);
         ULONGLONG elapsed = GetTickCount64() - t_start;
         if (ctrl_c_fired) { out("\r\n"); last_code = 0; }
         if (!ctrl_c_fired && elapsed >= 2000) {
