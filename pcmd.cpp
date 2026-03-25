@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <unordered_set>
+#include <unordered_map>
 
 #ifndef VERSION_MINOR
 #define VERSION_MINOR 0
@@ -68,11 +69,12 @@ static volatile bool ctrl_c_fired = false;
 
 // forward declarations so ctrl_handler can save history on close/shutdown
 struct editor;
-void save_history(const editor&, size_t);
 void save_prev_dir();
+void write_alias(const std::string&, const std::string&);
+void append_history(const std::wstring&);
+void compact_history();
 // Globals so ctrl_handler (which has no parameters) can reach the live editor state on unexpected exit.
 static editor* g_editor  = nullptr;
-static size_t  g_loaded  = 0;
 
 // Ctrl+C/Break: set flag and suppress for our process (child still receives the signal).
 // Close/Logoff/Shutdown: flush history to disk then let Windows terminate us.
@@ -82,7 +84,7 @@ BOOL WINAPI ctrl_handler(DWORD type) {
         return TRUE; // suppress for our process, child still gets it
     }
     if (type == CTRL_CLOSE_EVENT || type == CTRL_LOGOFF_EVENT || type == CTRL_SHUTDOWN_EVENT) {
-        if (g_editor) { save_history(*g_editor, g_loaded); save_prev_dir(); }
+        if (g_editor) { compact_history(); save_prev_dir(); }
         return FALSE; // let default handler terminate the process
     }
     return FALSE;
@@ -465,6 +467,7 @@ std::string readline(editor& e) {
             if (!full.empty()) {
                 e.hist.erase(std::remove(e.hist.begin(), e.hist.end(), full), e.hist.end());
                 e.hist.push_back(full);
+                append_history(full);
             }
             e.buf.clear();
             e.full_cmd.clear();
@@ -878,18 +881,17 @@ void ls(const std::string& arg, const std::string& filter = "") {
     }
 }
 
-// Returns the path to the persistent history file: %USERPROFILE%\.history.
-std::string history_path() {
+// Returns %USERPROFILE%\.pcmd\ and creates it if it doesn't exist.
+std::string pcmd_dir() {
     wchar_t buf[MAX_PATH];
     GetEnvironmentVariableW(L"USERPROFILE", buf, MAX_PATH);
-    return to_utf8(buf) + "\\.history";
+    std::string dir = to_utf8(buf) + "\\.pcmd";
+    CreateDirectoryW(to_wide(dir).c_str(), NULL); // no-op if already exists
+    return dir + "\\";
 }
 
-std::string prev_dir_path() {
-    wchar_t buf[MAX_PATH];
-    GetEnvironmentVariableW(L"USERPROFILE", buf, MAX_PATH);
-    return to_utf8(buf) + "\\.pcmd_prev_dir";
-}
+std::string history_path()  { return pcmd_dir() + "history";  }
+std::string prev_dir_path() { return pcmd_dir() + "prev_dir"; }
 
 void load_prev_dir() {
     std::ifstream f(prev_dir_path());
@@ -902,6 +904,54 @@ void save_prev_dir() {
     if (cur.empty()) return;
     std::ofstream f(prev_dir_path());
     f << cur << "\n";
+}
+
+// ---- aliases ----
+
+static std::unordered_map<std::string, std::string> aliases;
+
+std::string aliases_path() { return pcmd_dir() + "aliases"; }
+
+void load_aliases() {
+    std::ifstream f(aliases_path());
+    std::string line;
+    while (std::getline(f, line)) {
+        size_t eq = line.find('=');
+        if (eq != std::string::npos && eq > 0)
+            aliases[line.substr(0, eq)] = line.substr(eq + 1);
+    }
+}
+
+// Read-modify-write: reads file, applies change, rewrites.
+// Safe with parallel sessions — file is always authoritative.
+void write_alias(const std::string& name, const std::string& val) {
+    std::unordered_map<std::string, std::string> file_aliases;
+    { std::ifstream f(aliases_path()); std::string line;
+      while (std::getline(f, line)) {
+          size_t eq = line.find('=');
+          if (eq != std::string::npos && eq > 0)
+              file_aliases[line.substr(0, eq)] = line.substr(eq + 1);
+      }
+    }
+    if (val.empty()) file_aliases.erase(name);
+    else             file_aliases[name] = val;
+    aliases = file_aliases; // keep in-memory in sync
+    std::ofstream f(aliases_path());
+    for (auto& kv : file_aliases) f << kv.first << "=" << kv.second << "\n";
+}
+
+// Expands the first word of line if it matches an alias; appends remaining args.
+// Returns empty string if no alias matched.
+std::string expand_alias(const std::string& line) {
+    size_t sp = line.find(' ');
+    std::string name = sp == std::string::npos ? line : line.substr(0, sp);
+    std::string namel = name;
+    std::transform(namel.begin(), namel.end(), namel.begin(), ::tolower);
+    auto it = aliases.find(namel);
+    if (it == aliases.end()) return "";
+    std::string expanded = it->second;
+    if (sp != std::string::npos) expanded += line.substr(sp); // append args
+    return expanded;
 }
 
 // Reads .history into e.hist and deduplicates, keeping only the last occurrence of each
@@ -922,12 +972,26 @@ void load_history(editor& e) {
     std::reverse(e.hist.begin(), e.hist.end());
 }
 
-// Appends only the commands added this session (index >= loaded) to avoid rewriting
-// the whole file; the file grows append-only and is deduplicated on next load.
-void save_history(const editor& e, size_t loaded) {
+// Appends a single command to the history file immediately (fish-style: no loss on crash).
+void append_history(const std::wstring& cmd) {
     std::ofstream f(history_path(), std::ios::app);
-    for (size_t i = loaded; i < e.hist.size(); i++)
-        f << to_utf8(e.hist[i]) << "\n";
+    f << to_utf8(cmd) << "\n";
+}
+
+// Re-reads the history file, deduplicates keeping last occurrence, rewrites.
+// Safe with parallel sessions: file is the source of truth, not in-memory buffer.
+void compact_history() {
+    std::string path = history_path();
+    std::vector<std::wstring> raw;
+    { std::ifstream f(path); std::string line;
+      while (std::getline(f, line)) if (!line.empty()) raw.push_back(to_wide(line)); }
+    std::vector<std::wstring> deduped;
+    std::unordered_set<std::wstring> seen;
+    for (int i = (int)raw.size() - 1; i >= 0; i--)
+        if (seen.insert(raw[i]).second) deduped.push_back(raw[i]);
+    std::reverse(deduped.begin(), deduped.end());
+    std::ofstream f(path);
+    for (auto& e : deduped) f << to_utf8(e) << "\n";
 }
 
 // Spawns "cmd.exe /c <line>" and waits for it to finish. Temporarily restores orig_in_mode
@@ -954,7 +1018,7 @@ int run(const std::string& line) {
 int which(const std::string& arg) {
     std::string argl = arg;
     std::transform(argl.begin(), argl.end(), argl.begin(), ::tolower);
-    static const std::vector<std::string> builtins = {"ls","cd","pwd","cat","exit","which","help","version"};
+    static const std::vector<std::string> builtins = {"ls","cd","pwd","cat","exit","which","help","version","alias","unalias"};
     for (auto& b : builtins) {
         if (argl == b) { out(arg + ": pcmd built-in\r\n"); return 0; }
     }
@@ -1310,9 +1374,8 @@ int main() {
     editor e;
     load_history(e);
     load_prev_dir();
-    size_t loaded = e.hist.size();
+    load_aliases();
     g_editor = &e;
-    g_loaded = loaded;
 
     int last_code = 0;
     while (true) {
@@ -1348,8 +1411,56 @@ int main() {
         std::string lower = line;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
 
-        if (lower == "exit") { save_history(e, loaded); save_prev_dir(); break; }
+        if (lower == "exit") { compact_history(); save_prev_dir(); break; }
 
+        // alias / unalias
+        if (lower == "alias") {
+            if (aliases.empty()) { out(GRAY "No aliases defined.\r\n" RESET); }
+            else for (auto& kv : aliases)
+                out(GREEN + kv.first + RESET "=" + kv.second + "\r\n");
+            last_code = 0; continue;
+        }
+        if (lower.size() > 6 && lower.substr(0, 6) == "alias ") {
+            std::string rest = line.substr(6);
+            while (!rest.empty() && rest.front() == ' ') rest.erase(rest.begin());
+            size_t eq = rest.find('=');
+            if (eq == std::string::npos) {
+                // alias ll — show one
+                std::string namel = rest;
+                std::transform(namel.begin(), namel.end(), namel.begin(), ::tolower);
+                auto it = aliases.find(namel);
+                if (it == aliases.end()) err("alias: " + rest + ": not found\r\n");
+                else out(GREEN + it->first + RESET "=" + it->second + "\r\n");
+            } else {
+                std::string name = rest.substr(0, eq);
+                std::string val  = rest.substr(eq + 1);
+                std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+                if (val.empty()) { write_alias(name, ""); }  // alias ll= removes it
+                else { write_alias(name, val); }
+            }
+            last_code = 0; continue;
+        }
+        if (lower.size() > 8 && lower.substr(0, 8) == "unalias ") {
+            std::string name = line.substr(8);
+            while (!name.empty() && name.front() == ' ') name.erase(name.begin());
+            std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+            if (aliases.count(name)) { write_alias(name, ""); }
+            else err("unalias: " + name + ": not found\r\n");
+            last_code = 0; continue;
+        }
+
+        // expand alias (recursion guard: expanded line must not start with same name)
+        {
+            std::string expanded = expand_alias(line);
+            if (!expanded.empty()) {
+                size_t sp = expanded.find(' ');
+                std::string expl = sp == std::string::npos ? expanded : expanded.substr(0, sp);
+                std::transform(expl.begin(), expl.end(), expl.begin(), ::tolower);
+                size_t sp2 = lower.find(' ');
+                std::string orig = sp2 == std::string::npos ? lower : lower.substr(0, sp2);
+                if (expl != orig) { line = expanded; lower = expl; }
+            }
+        }
 
         if (lower == "help") {
             out(
@@ -1358,9 +1469,11 @@ int main() {
                 GREEN "ls" RESET "     Colored listing  -a all  -s by size  -t by time  -l long  -r reverse  | grep <word>\r\n"
                 GREEN "cd" RESET "     Change directory  ~ home  - prev dir\r\n"
                 GREEN "cat" RESET "    Print file with syntax highlighting  | grep <word>\r\n"
-                GREEN "which" RESET "  Locate a command in PATH or identify built-ins\r\n"
-                GREEN "help" RESET "   Show this help\r\n"
-                GREEN "exit" RESET "   Exit pcmd\r\n"
+                GREEN "which" RESET "   Locate a command in PATH or identify built-ins\r\n"
+                GREEN "alias" RESET "   alias ll=ls -l  define · alias ll  show · alias  list all\r\n"
+                GREEN "unalias" RESET " Remove an alias\r\n"
+                GREEN "help" RESET "    Show this help\r\n"
+                GREEN "exit" RESET "    Exit pcmd\r\n"
                 GRAY "All other commands are passed to cmd.exe" RESET "\r\n"
             );
             last_code = 0;
