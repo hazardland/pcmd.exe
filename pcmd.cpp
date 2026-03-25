@@ -50,8 +50,6 @@ std::wstring to_wide(const std::string& s) {
 }
 
 // Write UTF-8 bytes directly to stdout handle; bypasses C runtime buffering so ANSI sequences render immediately.
-// Excluded in test builds — pcmd_test.cpp provides its own stub so tests run without a real console.
-#ifndef PCMD_TEST
 void out(const std::string& s) {
     DWORD w;
     WriteFile(out_h, s.c_str(), (DWORD)s.size(), &w, NULL);
@@ -62,7 +60,6 @@ void err(const std::string& s) {
     DWORD w;
     WriteFile(err_h, s.c_str(), (DWORD)s.size(), &w, NULL);
 }
-#endif
 
 // ---- ctrl+c handler ----
 
@@ -72,6 +69,7 @@ static volatile bool ctrl_c_fired = false;
 // forward declarations so ctrl_handler can save history on close/shutdown
 struct editor;
 void save_history(const editor&, size_t);
+void save_prev_dir();
 // Globals so ctrl_handler (which has no parameters) can reach the live editor state on unexpected exit.
 static editor* g_editor  = nullptr;
 static size_t  g_loaded  = 0;
@@ -84,7 +82,7 @@ BOOL WINAPI ctrl_handler(DWORD type) {
         return TRUE; // suppress for our process, child still gets it
     }
     if (type == CTRL_CLOSE_EVENT || type == CTRL_LOGOFF_EVENT || type == CTRL_SHUTDOWN_EVENT) {
-        if (g_editor) save_history(*g_editor, g_loaded);
+        if (g_editor) { save_history(*g_editor, g_loaded); save_prev_dir(); }
         return FALSE; // let default handler terminate the process
     }
     return FALSE;
@@ -307,6 +305,13 @@ void find_hint(editor& e) {
     if (lower.size() >= 3 && lower.substr(0, 3) == L"ls ") {
         std::wstring token = e.buf.substr(3);
         auto matches = complete(token, true);
+        if (!matches.empty() && matches[0].size() > token.size())
+            e.hint = matches[0].substr(token.size());
+        return;
+    }
+    if (lower.size() >= 4 && lower.substr(0, 4) == L"cat ") {
+        std::wstring token = e.buf.substr(4);
+        auto matches = complete(token, false);
         if (!matches.empty() && matches[0].size() > token.size())
             e.hint = matches[0].substr(token.size());
         return;
@@ -627,11 +632,13 @@ std::string readline(editor& e) {
 
 // ---- commands ----
 
-// Last directory before a successful cd; enables "cd -" to jump back.
+// Last directory before a successful cd; enables "cd -" to jump back (session-only).
 static std::string prev_dir;
+// Last working directory from the previous session; enables "cd --" to restore it.
+static std::string last_session_dir;
 
 // Built-in cd: strips the /d compatibility flag, expands ~ to USERPROFILE, resolves "-" to
-// prev_dir, then calls SetCurrentDirectory. Updates prev_dir only on success.
+// prev_dir, "--" to last_session_dir, then calls SetCurrentDirectory. Updates prev_dir only on success.
 void cd(const std::string& line) {
     std::string args = line.size() > 2 ? line.substr(3) : "";
     // strip /d flag
@@ -642,10 +649,23 @@ void cd(const std::string& line) {
 
     if (args.empty()) { out(cwd() + "\r\n"); return; }
 
-    // cd - : jump to previous directory
+    // cd - : jump to previous directory (session-only)
     if (args == "-") {
         if (prev_dir.empty()) { err("No previous directory.\r\n"); return; }
         args = prev_dir;
+    }
+    // cd -- : restore last session's working directory
+    else if (args == "--") {
+        if (last_session_dir.empty()) { err("No previous session directory.\r\n"); return; }
+        args = last_session_dir;
+    }
+    // cd ~~ : go to the directory where pcmd.exe lives
+    else if (args == "~~") {
+        wchar_t exe[MAX_PATH];
+        GetModuleFileNameW(NULL, exe, MAX_PATH);
+        std::wstring ws(exe);
+        size_t slash = ws.find_last_of(L"\\/");
+        args = to_utf8(slash != std::wstring::npos ? ws.substr(0, slash) : ws);
     }
 
     // expand ~ to %USERPROFILE%
@@ -865,6 +885,25 @@ std::string history_path() {
     return to_utf8(buf) + "\\.history";
 }
 
+std::string prev_dir_path() {
+    wchar_t buf[MAX_PATH];
+    GetEnvironmentVariableW(L"USERPROFILE", buf, MAX_PATH);
+    return to_utf8(buf) + "\\.pcmd_prev_dir";
+}
+
+void load_prev_dir() {
+    std::ifstream f(prev_dir_path());
+    std::string line;
+    if (std::getline(f, line) && !line.empty()) last_session_dir = line;
+}
+
+void save_prev_dir() {
+    std::string cur = cwd();
+    if (cur.empty()) return;
+    std::ofstream f(prev_dir_path());
+    f << cur << "\n";
+}
+
 // Reads .history into e.hist and deduplicates, keeping only the last occurrence of each
 // command so the most recently used entry wins during UP navigation.
 void load_history(editor& e) {
@@ -911,19 +950,11 @@ int run(const std::string& line) {
     return (int)code;
 }
 
-#ifdef DEMO
-#include "pcmd_demo.cpp"
-#endif
-
 // Searches for arg as a built-in or executable in PATH; prints result and returns exit code (0=found, 1=not found).
 int which(const std::string& arg) {
     std::string argl = arg;
     std::transform(argl.begin(), argl.end(), argl.begin(), ::tolower);
-    static const std::vector<std::string> builtins = {"ls","cd","pwd","exit","which","help","version"
-#ifdef DEMO
-        ,"demo"
-#endif
-    };
+    static const std::vector<std::string> builtins = {"ls","cd","pwd","cat","exit","which","help","version"};
     for (auto& b : builtins) {
         if (argl == b) { out(arg + ": pcmd built-in\r\n"); return 0; }
     }
@@ -958,9 +989,291 @@ int which(const std::string& arg) {
     return 1;
 }
 
+// ---- cat ----
+
+// Language detected from file extension; drives syntax highlight rules.
+enum class lang { none, cpp, py, js, json, md, bat, sol, php, go, rust, cs, java, sh, html };
+
+static lang detect_lang(const std::string& path) {
+    size_t dot = path.rfind('.');
+    if (dot == std::string::npos) return lang::none;
+    std::string ext = path.substr(dot);
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext==".cpp"||ext==".c"||ext==".h"||ext==".hpp"||ext==".cc") return lang::cpp;
+    if (ext==".py")                                                   return lang::py;
+    if (ext==".js"||ext==".ts"||ext==".jsx"||ext==".tsx")            return lang::js;
+    if (ext==".json")                                                 return lang::json;
+    if (ext==".md")                                                   return lang::md;
+    if (ext==".bat"||ext==".cmd")                                     return lang::bat;
+    if (ext==".sol")                                                  return lang::sol;
+    if (ext==".php")                                                  return lang::php;
+    if (ext==".go")                                                   return lang::go;
+    if (ext==".rs")                                                   return lang::rust;
+    if (ext==".cs")                                                   return lang::cs;
+    if (ext==".java")                                                 return lang::java;
+    if (ext==".sh"||ext==".bash")                                     return lang::sh;
+    if (ext==".html"||ext==".htm"||ext==".xml"||ext==".svg")         return lang::html;
+    return lang::none;
+}
+
+// Scan a line left-to-right, coloring string literals (yellow), inline comment suffix (gray),
+// and any word matching the keywords list (blue). Used for languages with C-style syntax.
+static std::string colorize_inline(const std::string& line,
+                                   const std::vector<std::string>& kws,
+                                   const std::string& comment2 = "",
+                                   char comment1 = 0) {
+    std::string res;
+    size_t i = 0, n = line.size();
+    while (i < n) {
+        // two-char comment (// or ::)
+        if (!comment2.empty() && i + comment2.size() <= n &&
+            line.substr(i, comment2.size()) == comment2) {
+            res += GRAY + line.substr(i) + RESET; break;
+        }
+        // single-char comment (# for py/bat)
+        if (comment1 && line[i] == comment1) {
+            res += GRAY + line.substr(i) + RESET; break;
+        }
+        // string literal " or '
+        if (line[i] == '"' || line[i] == '\'') {
+            char q = line[i]; size_t j = i + 1;
+            while (j < n && line[j] != q) { if (line[j] == '\\') j++; j++; }
+            if (j < n) j++;
+            res += YELLOW + line.substr(i, j - i) + RESET;
+            i = j; continue;
+        }
+        // word / identifier
+        if (isalpha((unsigned char)line[i]) || line[i] == '_') {
+            size_t j = i;
+            while (j < n && (isalnum((unsigned char)line[j]) || line[j] == '_')) j++;
+            std::string word = line.substr(i, j - i);
+            bool kw = std::find(kws.begin(), kws.end(), word) != kws.end();
+            res += kw ? (BLUE + word + RESET) : word;
+            i = j; continue;
+        }
+        res += line[i++];
+    }
+    return res;
+}
+
+// Apply syntax highlighting to one line based on detected language.
+static std::string colorize_line(const std::string& line, lang l) {
+    if (l == lang::none) return line;
+    size_t first = line.find_first_not_of(" \t");
+    std::string pfx = (first == std::string::npos) ? "" : line.substr(first);
+    std::string pfl = pfx; std::transform(pfl.begin(), pfl.end(), pfl.begin(), ::tolower);
+
+    if (l == lang::md) {
+        if (!pfx.empty() && pfx[0] == '#')                              return YELLOW + line + RESET;
+        if (pfx.size()>=2 && (pfx[0]=='-'||pfx[0]=='*') && pfx[1]==' ') return BLUE + line + RESET;
+        if (pfx.size()>=3 && pfx.substr(0,3)=="```")                    return GREEN + line + RESET;
+        return line;
+    }
+    if (l == lang::bat) {
+        if (pfl.size()>=4 && pfl.substr(0,4)=="rem ") return GRAY + line + RESET;
+        if (pfx.size()>=2 && pfx.substr(0,2)=="::")   return GRAY + line + RESET;
+        static const std::vector<std::string> kw = {
+            "echo","set","if","else","for","call","goto","exit","mkdir","del",
+            "copy","move","pushd","popd","setlocal","endlocal","defined","exist"
+        };
+        return colorize_inline(line, kw);
+    }
+    if (l == lang::json) {
+        static const std::vector<std::string> kw = {"true","false","null"};
+        return colorize_inline(line, kw);
+    }
+    if (l == lang::cpp) {
+        if (pfx.size()>=2 && pfx.substr(0,2)=="//") return GRAY + line + RESET;
+        if (pfx.size()>=2 && pfx.substr(0,2)=="/*") return GRAY + line + RESET;
+        if (!pfx.empty() && pfx[0]=='#')             return YELLOW + line + RESET;
+        static const std::vector<std::string> kw = {
+            "auto","bool","break","case","char","class","const","continue","default",
+            "delete","do","double","else","enum","explicit","false","float","for",
+            "friend","if","inline","int","long","namespace","new","nullptr","operator",
+            "override","private","protected","public","return","short","signed","sizeof",
+            "static","struct","switch","template","this","throw","true","try","typedef",
+            "typename","union","unsigned","using","virtual","void","volatile","while"
+        };
+        return colorize_inline(line, kw, "//");
+    }
+    if (l == lang::py) {
+        if (!pfx.empty() && pfx[0]=='#') return GRAY + line + RESET;
+        static const std::vector<std::string> kw = {
+            "and","as","assert","async","await","break","class","continue","def","del",
+            "elif","else","except","False","finally","for","from","global","if","import",
+            "in","is","lambda","None","nonlocal","not","or","pass","raise","return",
+            "True","try","while","with","yield"
+        };
+        return colorize_inline(line, kw, "", '#');
+    }
+    if (l == lang::js) {
+        if (pfx.size()>=2 && pfx.substr(0,2)=="//") return GRAY + line + RESET;
+        static const std::vector<std::string> kw = {
+            "async","await","break","case","catch","class","const","continue","debugger",
+            "default","delete","do","else","export","extends","false","finally","for",
+            "function","if","import","in","instanceof","let","new","null","of","return",
+            "static","super","switch","this","throw","true","try","typeof","undefined",
+            "var","void","while","with","yield"
+        };
+        return colorize_inline(line, kw, "//");
+    }
+    if (l == lang::html) {
+        if (pfx.size()>=4 && pfx.substr(0,4)=="<!--") return GRAY + line + RESET;
+        static const std::vector<std::string> kw = {
+            // tags
+            "html","head","body","title","meta","link","script","style","base",
+            "div","span","p","a","br","hr","img","input","button","form","label",
+            "select","option","optgroup","textarea","fieldset","legend",
+            "h1","h2","h3","h4","h5","h6","ul","ol","li","dl","dt","dd",
+            "table","thead","tbody","tfoot","tr","th","td","caption","colgroup","col",
+            "header","footer","main","nav","section","article","aside","figure","figcaption",
+            "details","summary","dialog","template","slot","canvas","svg","path","rect",
+            "circle","ellipse","line","polyline","polygon","text","g","defs","use","symbol",
+            "audio","video","source","track","iframe","embed","object","param","picture",
+            "pre","code","blockquote","cite","q","abbr","acronym","address","em","strong",
+            "small","mark","del","ins","sub","sup","s","u","b","i","bdi","bdo","wbr",
+            "noscript","noframes","area","map",
+            // attributes
+            "class","id","href","src","type","name","value","placeholder","action",
+            "method","target","rel","charset","content","lang","dir","style",
+            "width","height","alt","title","role","aria","data","for","checked",
+            "disabled","readonly","required","multiple","selected","hidden","tabindex",
+            "onclick","onload","onchange","oninput","onsubmit","defer","async","crossorigin"
+        };
+        return colorize_inline(line, kw);
+    }
+    if (l == lang::php) {
+        if (pfx.size()>=2 && pfx.substr(0,2)=="//") return GRAY + line + RESET;
+        if (pfx.size()>=2 && pfx.substr(0,2)=="/*") return GRAY + line + RESET;
+        if (!pfx.empty() && pfx[0]=='#')             return GRAY + line + RESET;
+        static const std::vector<std::string> kw = {
+            "abstract","array","as","break","callable","case","catch","class","clone",
+            "const","continue","declare","default","do","echo","else","elseif","empty",
+            "enddeclare","endfor","endforeach","endif","endswitch","endwhile","enum",
+            "extends","final","finally","fn","for","foreach","function","global","goto",
+            "if","implements","include","include_once","instanceof","insteadof","interface",
+            "isset","list","match","namespace","new","null","print","private","protected",
+            "public","readonly","require","require_once","return","static","switch","throw",
+            "trait","true","false","try","unset","use","var","while","yield","int","float",
+            "string","bool","void","never","mixed","self","parent"
+        };
+        return colorize_inline(line, kw, "//", '#');
+    }
+    if (l == lang::go) {
+        if (pfx.size()>=2 && pfx.substr(0,2)=="//") return GRAY + line + RESET;
+        if (pfx.size()>=2 && pfx.substr(0,2)=="/*") return GRAY + line + RESET;
+        static const std::vector<std::string> kw = {
+            "break","case","chan","const","continue","default","defer","else","fallthrough",
+            "for","func","go","goto","if","import","interface","map","package","range",
+            "return","select","struct","switch","type","var","nil","true","false",
+            "int","int8","int16","int32","int64","uint","uint8","uint16","uint32","uint64",
+            "uintptr","float32","float64","complex64","complex128","byte","rune","string",
+            "bool","error","any","make","new","len","cap","append","copy","delete","close",
+            "panic","recover","print","println"
+        };
+        return colorize_inline(line, kw, "//");
+    }
+    if (l == lang::rust) {
+        if (pfx.size()>=2 && pfx.substr(0,2)=="//") return GRAY + line + RESET;
+        if (pfx.size()>=2 && pfx.substr(0,2)=="/*") return GRAY + line + RESET;
+        static const std::vector<std::string> kw = {
+            "as","async","await","break","const","continue","crate","dyn","else","enum",
+            "extern","false","fn","for","if","impl","in","let","loop","match","mod","move",
+            "mut","pub","ref","return","self","Self","static","struct","super","trait",
+            "true","type","unsafe","use","where","while","i8","i16","i32","i64","i128",
+            "isize","u8","u16","u32","u64","u128","usize","f32","f64","bool","char","str",
+            "String","Vec","Option","Result","Some","None","Ok","Err","Box","Rc","Arc"
+        };
+        return colorize_inline(line, kw, "//");
+    }
+    if (l == lang::cs) {
+        if (pfx.size()>=2 && pfx.substr(0,2)=="//") return GRAY + line + RESET;
+        if (pfx.size()>=2 && pfx.substr(0,2)=="/*") return GRAY + line + RESET;
+        static const std::vector<std::string> kw = {
+            "abstract","as","base","bool","break","byte","case","catch","char","checked",
+            "class","const","continue","decimal","default","delegate","do","double","else",
+            "enum","event","explicit","extern","false","finally","fixed","float","for",
+            "foreach","goto","if","implicit","in","int","interface","internal","is","lock",
+            "long","namespace","new","null","object","operator","out","override","params",
+            "private","protected","public","readonly","ref","return","sbyte","sealed","short",
+            "sizeof","static","string","struct","switch","this","throw","true","try","typeof",
+            "uint","ulong","unchecked","unsafe","ushort","using","var","virtual","void",
+            "volatile","while","async","await","dynamic","record","init","required","with"
+        };
+        return colorize_inline(line, kw, "//");
+    }
+    if (l == lang::java) {
+        if (pfx.size()>=2 && pfx.substr(0,2)=="//") return GRAY + line + RESET;
+        if (pfx.size()>=2 && pfx.substr(0,2)=="/*") return GRAY + line + RESET;
+        static const std::vector<std::string> kw = {
+            "abstract","assert","boolean","break","byte","case","catch","char","class",
+            "const","continue","default","do","double","else","enum","extends","final",
+            "finally","float","for","goto","if","implements","import","instanceof","int",
+            "interface","long","native","new","null","package","private","protected","public",
+            "return","short","static","strictfp","super","switch","synchronized","this",
+            "throw","throws","transient","true","false","try","var","void","volatile","while",
+            "record","sealed","permits","yield"
+        };
+        return colorize_inline(line, kw, "//");
+    }
+    if (l == lang::sh) {
+        if (!pfx.empty() && pfx[0]=='#') return GRAY + line + RESET;
+        static const std::vector<std::string> kw = {
+            "if","then","else","elif","fi","for","in","do","done","while","until","case",
+            "esac","select","function","return","exit","break","continue","shift","local",
+            "readonly","export","unset","source","declare","typeset","eval","exec","trap",
+            "wait","read","echo","printf","test","true","false"
+        };
+        return colorize_inline(line, kw, "", '#');
+    }
+    if (l == lang::sol) {
+        if (pfx.size()>=2 && pfx.substr(0,2)=="//") return GRAY + line + RESET;
+        if (pfx.size()>=2 && pfx.substr(0,2)=="/*") return GRAY + line + RESET;
+        static const std::vector<std::string> kw = {
+            "pragma","contract","interface","library","abstract","is","using","import",
+            "function","modifier","event","error","struct","enum","mapping","constructor",
+            "fallback","receive","returns","return",
+            "public","private","internal","external","view","pure","payable","virtual","override",
+            "memory","storage","calldata","indexed","anonymous",
+            "uint","uint8","uint16","uint32","uint64","uint128","uint256",
+            "int","int8","int16","int32","int64","int128","int256",
+            "bytes","bytes1","bytes2","bytes4","bytes8","bytes16","bytes32",
+            "address","bool","string","fixed","ufixed",
+            "if","else","for","while","do","break","continue","new","delete","emit","revert",
+            "require","assert","selfdestruct","type","try","catch",
+            "true","false","wei","gwei","ether","seconds","minutes","hours","days","weeks"
+        };
+        return colorize_inline(line, kw, "//");
+    }
+    return line;
+}
+
+// Reads a file and prints it with syntax highlighting. filter is an optional case-insensitive
+// substring — only lines containing it are shown (like cat file | grep word).
+int cat(const std::string& path, const std::string& filter = "") {
+    std::string p = path;
+    if (p.size()>=2 && p.front()=='"' && p.back()=='"') p = p.substr(1, p.size()-2);
+    std::replace(p.begin(), p.end(), '/', '\\');
+    std::ifstream f(p);
+    if (!f.is_open()) { out("cat: cannot open '" + path + "'\r\n"); return 1; }
+    lang l = detect_lang(p);
+    std::string flt = filter;
+    std::transform(flt.begin(), flt.end(), flt.begin(), ::tolower);
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back()=='\r') line.pop_back();
+        if (!flt.empty()) {
+            std::string ll = line;
+            std::transform(ll.begin(), ll.end(), ll.begin(), ::tolower);
+            if (ll.find(flt) == std::string::npos) continue;
+        }
+        out(colorize_line(line, l) + "\r\n");
+    }
+    return 0;
+}
+
 // ---- main ----
 
-#ifndef PCMD_TEST
 int main() {
     out_h = GetStdHandle(STD_OUTPUT_HANDLE);
     err_h = GetStdHandle(STD_ERROR_HANDLE);
@@ -996,6 +1309,7 @@ int main() {
     bool elev = elevated();
     editor e;
     load_history(e);
+    load_prev_dir();
     size_t loaded = e.hist.size();
     g_editor = &e;
     g_loaded = loaded;
@@ -1034,11 +1348,8 @@ int main() {
         std::string lower = line;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
 
-        if (lower == "exit") { save_history(e, loaded); break; }
+        if (lower == "exit") { save_history(e, loaded); save_prev_dir(); break; }
 
-#ifdef DEMO
-        if (lower == "demo") { demo_run(e); last_code = 0; continue; }
-#endif
 
         if (lower == "help") {
             out(
@@ -1046,6 +1357,7 @@ int main() {
                 GREEN "pwd" RESET "     Print current directory\r\n"
                 GREEN "ls" RESET "     Colored listing  -a all  -s by size  -t by time  -l long  -r reverse  | grep <word>\r\n"
                 GREEN "cd" RESET "     Change directory  ~ home  - prev dir\r\n"
+                GREEN "cat" RESET "    Print file with syntax highlighting  | grep <word>\r\n"
                 GREEN "which" RESET "  Locate a command in PATH or identify built-ins\r\n"
                 GREEN "help" RESET "   Show this help\r\n"
                 GREEN "exit" RESET "   Exit pcmd\r\n"
@@ -1071,6 +1383,31 @@ int main() {
             std::string arg = line.substr(6);
             while (!arg.empty() && arg.front() == ' ') arg.erase(arg.begin());
             last_code = which(arg);
+            continue;
+        }
+
+        // cat <file> | grep <word>  or  cat <file> | findstr <word>
+        if (lower.size() >= 4 && lower.substr(0, 4) == "cat ") {
+            std::string rest = line.substr(4);
+            std::string filter;
+            size_t pipe = rest.find('|');
+            if (pipe != std::string::npos) {
+                std::string rhs = rest.substr(pipe + 1);
+                while (!rhs.empty() && rhs.front() == ' ') rhs.erase(rhs.begin());
+                std::string rhl = rhs; std::transform(rhl.begin(), rhl.end(), rhl.begin(), ::tolower);
+                auto word = [](const std::string& s, size_t skip) {
+                    std::string w = s.substr(skip);
+                    while (!w.empty() && w.front() == ' ') w.erase(w.begin());
+                    size_t sp = w.find(' ');
+                    return sp == std::string::npos ? w : w.substr(0, sp);
+                };
+                if (rhl.size() >= 5 && rhl.substr(0, 5) == "grep ")    filter = word(rhs, 5);
+                if (rhl.size() >= 8 && rhl.substr(0, 8) == "findstr ") filter = word(rhs, 8);
+                rest = rest.substr(0, pipe);
+            }
+            while (!rest.empty() && rest.front() == ' ') rest.erase(rest.begin());
+            while (!rest.empty() && rest.back()  == ' ') rest.pop_back();
+            last_code = cat(rest, filter);
             continue;
         }
 
@@ -1166,4 +1503,3 @@ int main() {
 
     return 0;
 }
-#endif // PCMD_TEST

@@ -18,7 +18,7 @@ What I was actually missing:
 - **History that persists** — close the window, open it again, your history is still there
 - **History hints** — gray ghost text as you type, filtered `↑`/`↓` that only shows commands matching what you started typing
 - **Folder tab completion** — `cd ../pr` + Tab and it just works, including parent paths; `ls` gets the same hints and tab cycling
-- **`cd -`** — jump back to where you were, like every Linux shell takes for granted
+- **`cd -`** — jump back to where you were, like every Linux shell takes for granted; `cd --` restores the directory from the previous session; `cd ~~` jumps to wherever pcmd.exe lives
 - **Elapsed time** — always want to know how long that build or install actually took
 - **`pwd`, `which`** — small tools that should just exist
 - **Multiline paste** — pasting a curl command from Chrome without the terminal losing its mind
@@ -98,7 +98,30 @@ Colors: dirs blue · executables green · archives red · images magenta · audi
 
 ---
 
-- `cd <dir>` — with `/d` flag, `~` for home, `-` for previous directory
+`cat [path] [| grep <word>]` — print file contents with syntax highlighting
+
+| Extension | Language |
+|-----------|----------|
+| `.cpp` `.c` `.h` `.hpp` | C / C++ |
+| `.py` | Python |
+| `.js` `.ts` `.jsx` `.tsx` | JavaScript / TypeScript |
+| `.json` | JSON |
+| `.md` | Markdown |
+| `.bat` `.cmd` | Batch |
+| `.sol` | Solidity |
+| `.php` | PHP |
+| `.go` | Go |
+| `.rs` | Rust |
+| `.cs` | C# |
+| `.java` | Java |
+| `.sh` `.bash` | Bash / Shell |
+| `.html` `.htm` `.xml` `.svg` | HTML / XML |
+
+`cat file.cpp | grep <word>` — print only lines containing word (case-insensitive).
+
+---
+
+- `cd <dir>` — with `/d` flag, `~` for home, `-` for previous directory, `--` for last session's directory, `~~` for pcmd.exe's directory
 - `pwd` — print current directory with forward slashes
 - `which <cmd>` — locate a command in PATH, or identify pcmd built-ins
 - `version` — print current pcmd version
@@ -148,7 +171,3 @@ To build from source:
 g++ pcmd.cpp -o pcmd.exe -DVERSION_MINOR=X -ladvapi32 -lshell32
 ```
 or just run `build.bat` which auto-increments the version.
-
----
-
-> The original batch-based powerline system is documented in [batch/readme.md](./batch/readme.md).
