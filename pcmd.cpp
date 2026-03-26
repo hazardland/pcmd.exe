@@ -438,7 +438,7 @@ static int row_count(const std::wstring& buf) {
 }
 
 // Physical screen rows from the start of input down to flat offset p.
-// Row 0 starts at column prompt_vis; continuation rows (after \n) start at column 2 ("> " prefix).
+// Row 0 starts at column prompt_vis; continuation rows (after \n) start at column 2 (2-space indent).
 // Long lines wrap at terminal width, each wrap adds one physical row.
 static int phys_rows(const std::wstring& buf, int p, int prompt_vis, int width) {
     int rows = 0, col = prompt_vis;
@@ -449,7 +449,7 @@ static int phys_rows(const std::wstring& buf, int p, int prompt_vis, int width) 
     return rows;
 }
 
-// Physical screen column (0-based) at flat offset p.
+// Physical screen column (0-based) at flat offset p. Continuation rows start at col 2 (2-space indent).
 static int phys_col(const std::wstring& buf, int p, int prompt_vis, int width) {
     int col = prompt_vis;
     for (int i = 0; i < p && i < (int)buf.size(); i++) {
@@ -476,11 +476,17 @@ void redraw(editor& e) {
     s += "\r\x1b[J";   // col 0 of prompt row, clear to end of screen
     s += e.prompt_str;
 
-    // Render buf: each \n becomes \r\n> (continuation visual prefix)
+    // Render buf: continuation markers (\ ^) go gray; \n becomes \r\n + 2-space indent
     std::string buf_utf8 = to_utf8(e.buf);
-    for (char c : buf_utf8) {
-        if (c == '\n') s += "\r\n> ";
-        else           s += c;
+    for (size_t i = 0; i < buf_utf8.size(); i++) {
+        char c = buf_utf8[i];
+        if (c == '\n') {
+            s += "\r\n  ";
+        } else if ((c == '\\' || c == '^') && i + 1 < buf_utf8.size() && buf_utf8[i + 1] == '\n') {
+            s += GRAY; s += c; s += RESET;
+        } else {
+            s += c;
+        }
     }
 
     // Gray hint — only shown in single-line mode to avoid complexity
