@@ -318,8 +318,7 @@ std::vector<std::wstring> complete(const std::wstring& prefix, bool dirs_only = 
 // All mutable state for one input session. hist persists across prompts; all other
 // fields are reset after each Enter so each new line starts clean.
 struct editor {
-    std::wstring buf;           // what the user has typed; the only thing that gets executed
-    std::wstring full_cmd;      // segments accumulated across ^ line continuations; prepended to buf on final Enter
+    std::wstring buf;           // what the user has typed; multiline content uses embedded \n
     int pos        = 0;         // cursor position within buf (not screen column)
     int prev_pos   = 0;         // buf position as of last redraw; used to compute how many rows to move up
     int prompt_vis = 0;         // visual width of prompt_str (no ANSI codes); needed for screen-column math
@@ -327,7 +326,8 @@ struct editor {
 
     std::vector<std::wstring> hist; // history list oldest-first; deduplicated so each command appears once
     int hist_idx  = -1;         // -1 = edit mode; >= 0 = index into hist during UP/DOWN navigation
-    std::wstring saved;         // snapshot of buf taken when UP is first pressed; prefix filter for navigation; empty = plain (unfiltered)
+    std::wstring saved;         // prefix filter for navigation (buf at UP time, or empty for plain nav)
+    std::wstring draft;         // uncommitted buf snapshot taken when UP is first pressed; restored on DOWN to floor
     bool plain_nav = false;     // set true after accepting a hint with →/End so the next UP ignores buf as filter
     std::wstring hint;          // gray ghost suffix after cursor; in nav mode it holds the suffix of the matching history entry
 
@@ -346,6 +346,7 @@ struct editor {
 void find_hint(editor& e) {
     e.hint.clear();
     if (e.buf.empty() || e.hist_idx != -1) return;
+    if (e.buf.find(L'\n') != std::wstring::npos) return; // no hint in multiline mode
     std::wstring lower = e.buf;
     std::transform(lower.begin(), lower.end(), lower.begin(), ::towlower);
     if (lower == L"cd" || (lower.size() >= 3 && lower.substr(0, 3) == L"cd ")) {
@@ -398,71 +399,199 @@ int term_width() {
     return 80;
 }
 
+// ---- multiline helpers ----
+// All helpers treat \n embedded in buf as logical line separators.
+// Continuation rows are rendered with a 2-char "> " prefix by redraw().
+
+// Logical row index (0-based) at flat buffer offset p.
+static int row_of(const std::wstring& buf, int p) {
+    int r = 0;
+    for (int i = 0; i < p && i < (int)buf.size(); i++)
+        if (buf[i] == L'\n') r++;
+    return r;
+}
+
+// Column within the current logical row at flat offset p (0-based, not counting "> " prefix).
+static int col_of(const std::wstring& buf, int p) {
+    int c = 0;
+    for (int i = 0; i < p && i < (int)buf.size(); i++) {
+        if (buf[i] == L'\n') c = 0;
+        else c++;
+    }
+    return c;
+}
+
+// Flat offset of the first character of logical row r.
+static int row_start(const std::wstring& buf, int r) {
+    if (r == 0) return 0;
+    int cur = 0;
+    for (int i = 0; i < (int)buf.size(); i++)
+        if (buf[i] == L'\n' && ++cur == r) return i + 1;
+    return (int)buf.size();
+}
+
+// Total logical row count (always >= 1).
+static int row_count(const std::wstring& buf) {
+    int n = 1;
+    for (wchar_t c : buf) if (c == L'\n') n++;
+    return n;
+}
+
+// Physical screen rows from the start of input down to flat offset p.
+// Row 0 starts at column prompt_vis; continuation rows (after \n) start at column 2 ("> " prefix).
+// Long lines wrap at terminal width, each wrap adds one physical row.
+static int phys_rows(const std::wstring& buf, int p, int prompt_vis, int width) {
+    int rows = 0, col = prompt_vis;
+    for (int i = 0; i < p && i < (int)buf.size(); i++) {
+        if (buf[i] == L'\n') { rows++; col = 2; }
+        else { col++; if (col >= width) { rows++; col = 0; } }
+    }
+    return rows;
+}
+
+// Physical screen column (0-based) at flat offset p.
+static int phys_col(const std::wstring& buf, int p, int prompt_vis, int width) {
+    int col = prompt_vis;
+    for (int i = 0; i < p && i < (int)buf.size(); i++) {
+        if (buf[i] == L'\n') { col = 2; }
+        else { col++; if (col >= width) col = 0; }
+    }
+    return col;
+}
+
 // Redraws the entire input line in place: moves up to the prompt row using prev_pos (where the
 // cursor actually is), clears to end of screen, reprints prompt + buf + gray hint, then
-// repositions the cursor at e.pos. Batches all output into one write to avoid flicker.
+// repositions the cursor at e.pos. Handles multiline buf (embedded \n) by rendering each
+// logical line with a "> " continuation prefix. Batches all output into one write to avoid flicker.
 void redraw(editor& e) {
     int width   = term_width();
-    // cur_row: how many rows below the prompt start the cursor currently sits
-    int cur_row = (e.prompt_vis + e.prev_pos) / width;
+    int cur_row = phys_rows(e.buf, e.prev_pos, e.prompt_vis, width);
 
     std::string s;
-    // move up to the prompt row
     if (cur_row > 0) {
         char esc[32];
         snprintf(esc, sizeof(esc), "\x1b[%dA", cur_row);
         s += esc;
     }
-    s += "\r";           // col 0 of prompt row
-    s += "\x1b[J";       // clear to end of screen
-    s += e.prompt_str;   // reprint prompt
-    s += to_utf8(e.buf); // reprint buffer
+    s += "\r\x1b[J";   // col 0 of prompt row, clear to end of screen
+    s += e.prompt_str;
 
-    // gray hint — cap to remaining cols on last line so it never wraps
-    if (!e.hint.empty()) {
-        int end_col = (e.prompt_vis + (int)e.buf.size()) % width;
+    // Render buf: each \n becomes \r\n> (continuation visual prefix)
+    std::string buf_utf8 = to_utf8(e.buf);
+    for (char c : buf_utf8) {
+        if (c == '\n') s += "\r\n> ";
+        else           s += c;
+    }
+
+    // Gray hint — only shown in single-line mode to avoid complexity
+    if (!e.hint.empty() && e.buf.find(L'\n') == std::wstring::npos) {
+        int end_col   = phys_col(e.buf, (int)e.buf.size(), e.prompt_vis, width);
         int remaining = width - end_col;
         std::wstring shown = e.hint.substr(0, std::min((int)e.hint.size(), remaining - 1));
         if (!shown.empty())
             s += GRAY + to_utf8(shown) + RESET;
     }
 
-    // position cursor at e.pos
-    int end_row = (e.prompt_vis + (int)e.buf.size()) / width;
-    int pos_row = (e.prompt_vis + e.pos) / width;
-    int pos_col = (e.prompt_vis + e.pos) % width;
-    int rows_up = end_row - pos_row;
+    // Position cursor at e.pos
+    int total_rows = phys_rows(e.buf, (int)e.buf.size(), e.prompt_vis, width);
+    int pos_row    = phys_rows(e.buf, e.pos, e.prompt_vis, width);
+    int pos_col    = phys_col(e.buf, e.pos, e.prompt_vis, width);
+    int rows_up    = total_rows - pos_row;
     if (rows_up > 0) {
         char esc[32];
         snprintf(esc, sizeof(esc), "\x1b[%dA", rows_up);
         s += esc;
     }
-    char col[32];
-    snprintf(col, sizeof(col), "\x1b[%dG", pos_col + 1);
-    s += col;
+    char col_esc[32];
+    snprintf(col_esc, sizeof(col_esc), "\x1b[%dG", pos_col + 1);
+    s += col_esc;
 
     out(s);
     e.prev_pos = e.pos;
 }
 
-// Advances history navigation one step in direction dir (-1 = UP, +1 = DOWN).
-// In filtered mode (saved non-empty) searches for the next entry starting with saved;
-// falls back to plain cycle if no match exists. Shared by VK_UP and VK_DOWN handlers.
+// Inserts clipboard text at the current cursor position.
+// Normalises \r\n / lone \r to \n, strips trailing newlines, then inserts the block into buf.
+// Single-line text inserts normally; multiline text embeds \n chars and lets redraw show "> " prefixes.
+// Caller must have already called FlushConsoleInputBuffer to discard ConHost's synthetic KEY_EVENTs.
+static void paste_text(editor& e, const wchar_t* raw) {
+    // Normalise line endings
+    std::wstring text;
+    for (const wchar_t* p = raw; *p; p++) {
+        if (*p == L'\r') {
+            text += L'\n';
+            if (*(p + 1) == L'\n') p++;
+        } else {
+            text += *p;
+        }
+    }
+    while (!text.empty() && text.back() == L'\n') text.pop_back();
+    if (text.empty()) return;
+
+    e.hist_idx  = -1;
+    e.plain_nav = false;
+    e.hint.clear();
+    e.buf.insert(e.pos, text);
+    e.pos += (int)text.size();
+    find_hint(e); // no-op for multiline (early-exits when buf has \n)
+    redraw(e);
+}
+
+// Reads clipboard CF_UNICODETEXT and passes it to paste_text().
+// Flushes the console input queue first so ConHost's auto-injected KEY_EVENTs are discarded.
+static void do_paste(editor& e) {
+    FlushConsoleInputBuffer(in_h);
+    if (!OpenClipboard(NULL)) return;
+    HANDLE h = GetClipboardData(CF_UNICODETEXT);
+    if (h) {
+        wchar_t* txt = static_cast<wchar_t*>(GlobalLock(h));
+        if (txt) { paste_text(e, txt); GlobalUnlock(h); }
+    }
+    CloseClipboard();
+}
+
+// Advances history navigation one step in direction dir (-1 = UP/older, +1 = DOWN/newer).
+// No wrap-around: UP stops at the oldest entry, DOWN past the newest restores the pre-nav
+// draft (saved) and exits nav mode. In filtered mode only entries starting with saved match.
 static void nav_step(editor& e, int dir) {
     int n = (int)e.hist.size();
-    int start = ((e.hist_idx + dir) % n + n) % n;
-    if (e.saved.empty()) {
-        e.hist_idx = start;
-        e.buf = e.hist[e.hist_idx]; e.hint.clear();
-    } else {
-        int found = -1;
-        for (int i = 0; i < n; i++) {
-            int idx = ((e.hist_idx + dir * (1 + i)) % n + n) % n;
-            if (e.hist[idx].substr(0, e.saved.size()) == e.saved) { found = idx; break; }
-        }
-        if (found == -1) {
-            e.hist_idx = start; e.buf = e.hist[e.hist_idx]; e.hint.clear();
+    if (n == 0) return;
+
+    if (dir == -1) {  // UP → older
+        if (e.hist_idx == 0) return;  // already at ceiling, do nothing
+        // hist_idx == n is the virtual "just entered nav" position; first candidate is n-1
+        int start = (e.hist_idx == n) ? n - 1 : e.hist_idx - 1;
+        if (e.saved.empty()) {
+            e.hist_idx = start;
+            e.buf = e.hist[start]; e.hint.clear();
         } else {
+            int found = -1;
+            for (int i = start; i >= 0; i--)
+                if (e.hist[i].size() >= e.saved.size() &&
+                    e.hist[i].substr(0, e.saved.size()) == e.saved) { found = i; break; }
+            if (found == -1) return;  // no older match, stay put
+            e.hist_idx = found;
+            e.buf  = e.saved;
+            e.hint = e.hist[found].substr(e.saved.size());
+        }
+    } else {  // DOWN → newer
+        int start = e.hist_idx + 1;
+        // Past newest → restore uncommitted draft and exit nav mode
+        auto restore_draft = [&]() {
+            e.buf = e.draft; e.hint.clear();
+            e.hist_idx = -1; e.saved.clear(); e.draft.clear(); e.plain_nav = false;
+            e.pos = (int)e.buf.size(); redraw(e);
+        };
+        if (start >= n) { restore_draft(); return; }
+        if (e.saved.empty()) {
+            e.hist_idx = start;
+            e.buf = e.hist[start]; e.hint.clear();
+        } else {
+            int found = -1;
+            for (int i = start; i < n; i++)
+                if (e.hist[i].size() >= e.saved.size() &&
+                    e.hist[i].substr(0, e.saved.size()) == e.saved) { found = i; break; }
+            if (found == -1) return;  // already at newest filtered match → stop (floor of filtered nav)
             e.hist_idx = found;
             e.buf  = e.saved;
             e.hint = e.hist[found].substr(e.saved.size());
@@ -473,10 +602,20 @@ static void nav_step(editor& e, int dir) {
 }
 
 // Transitions the editor into history-nav mode on the first UP key press.
-// Snapshots buf as the filter prefix (or empty if plain_nav). If a hint is already visible,
-// anchors hist_idx at that entry so the next nav_step immediately moves past it.
+// Always snapshots buf into draft (restored when DOWN returns to the floor).
+// Sets saved as the filter prefix; if no history entry matches, clears saved so the user
+// is not stuck — plain nav is used instead and the draft is still restored on DOWN.
 static void enter_nav(editor& e) {
+    e.draft = e.buf;  // preserve uncommitted text; restored when plain-nav DOWN reaches the floor
     e.saved = e.plain_nav ? L"" : e.buf;
+    // If the filter matches nothing, fall back to plain nav
+    if (!e.saved.empty()) {
+        bool any = false;
+        for (auto& h : e.hist)
+            if (h.size() >= e.saved.size() &&
+                h.substr(0, e.saved.size()) == e.saved) { any = true; break; }
+        if (!any) e.saved.clear();
+    }
     e.hist_idx = (int)e.hist.size();
     if (!e.hint.empty() && !e.saved.empty()) {
         std::wstring full = e.buf + e.hint;
@@ -496,6 +635,22 @@ std::string readline(editor& e) {
         INPUT_RECORD ir;
         DWORD count;
         if (!ReadConsoleInputW(in_h, &ir, 1, &count)) break;
+
+        // -- Right-click paste (no selection) --
+        // ENABLE_MOUSE_INPUT delivers right-click as MOUSE_EVENT. If there is no active
+        // text selection, ConHost treats right-click as paste, so we intercept it here and
+        // read the clipboard directly instead of letting the injected KEY_EVENTs trickle in.
+        if (ir.EventType == MOUSE_EVENT) {
+            auto& me = ir.Event.MouseEvent;
+            if ((me.dwButtonState & RIGHTMOST_BUTTON_PRESSED) && me.dwEventFlags == 0) {
+                CONSOLE_SELECTION_INFO sel = {};
+                GetConsoleSelectionInfo(&sel);
+                bool has_sel = (sel.dwFlags & CONSOLE_SELECTION_IN_PROGRESS) &&
+                               (sel.dwFlags & CONSOLE_MOUSE_SELECTION);
+                if (!has_sel) do_paste(e);
+            }
+            continue;
+        }
         if (ir.EventType != KEY_EVENT || !ir.Event.KeyEvent.bKeyDown) continue;
 
         WORD vk     = ir.Event.KeyEvent.wVirtualKeyCode;
@@ -506,26 +661,52 @@ std::string readline(editor& e) {
         // Any key other than Tab resets the Tab cycling state.
         if (vk != VK_TAB) e.tab_on = false;
 
-        // -- Enter: submit line --
-        // If buf ends with ^ or \, accumulate into full_cmd and start a continuation line.
-        // Otherwise auto-accept any nav hint, deduplicate + push to history, reset all state, return.
+        // -- Enter: accumulate or submit --
+        // Check the current logical line (segment after the last \n).
+        // If it ends with \ or ^, the user/paste is continuing — append \n to buf and keep editing.
+        // Otherwise join all accumulated lines (stripping continuation markers) and execute.
         if (vk == VK_RETURN) {
-            std::wstring trimmed = e.buf;
+            // Find the current logical line (everything after the last \n in buf)
+            size_t last_nl = e.buf.rfind(L'\n');
+            std::wstring cur_line = (last_nl == std::wstring::npos)
+                                    ? e.buf
+                                    : e.buf.substr(last_nl + 1);
+            std::wstring trimmed = cur_line;
             while (!trimmed.empty() && trimmed.back() == L' ') trimmed.pop_back();
-            if (!trimmed.empty() && (trimmed.back() == L'^' || trimmed.back() == L'\\')) {
-                e.full_cmd += trimmed.substr(0, trimmed.size() - 1);
-                e.buf.clear();
-                e.pos        = 0;
-                e.prev_pos   = 0;
-                e.prompt_str = "> ";
-                e.prompt_vis = 2;
-                out("\r\n\x1b[2K> "); // \x1b[2K clears the line (erases any "More?" ConHost may have echoed)
+            if (!trimmed.empty() && (trimmed.back() == L'\\' || trimmed.back() == L'^')) {
+                // Continuation: store line break in buf, redraw the growing block, keep editing
+                e.hint.clear();
+                e.buf += L'\n';
+                e.pos = (int)e.buf.size();
+                redraw(e);
                 continue;
             }
-            if (e.hist_idx != -1 && !e.hint.empty()) e.buf += e.hint; // accept nav hint on Enter
-            e.hint.clear(); redraw(e); // clear ghost text before submitting
+
+            if (e.hist_idx != -1 && !e.hint.empty()) e.buf += e.hint;
+            e.hint.clear(); redraw(e);
             out("\r\n");
-            std::wstring full = e.full_cmd + e.buf;
+
+            std::wstring full;
+            if (e.buf.find(L'\n') != std::wstring::npos) {
+                // Join: split on \n, strip trailing continuation char from each segment, join with space
+                std::wstring seg;
+                for (size_t i = 0; i <= e.buf.size(); i++) {
+                    if (i == e.buf.size() || e.buf[i] == L'\n') {
+                        while (!seg.empty() && seg.back() == L' ') seg.pop_back();
+                        if (!seg.empty() && (seg.back() == L'\\' || seg.back() == L'^'))
+                            seg.pop_back();
+                        while (!seg.empty() && seg.back() == L' ') seg.pop_back();
+                        if (!full.empty()) full += L' ';
+                        full += seg;
+                        seg.clear();
+                    } else {
+                        seg += e.buf[i];
+                    }
+                }
+            } else {
+                full = e.buf;
+            }
+
             std::string line = to_utf8(full);
             if (!full.empty()) {
                 e.hist.erase(std::remove(e.hist.begin(), e.hist.end(), full), e.hist.end());
@@ -533,7 +714,6 @@ std::string readline(editor& e) {
                 append_history(full);
             }
             e.buf.clear();
-            e.full_cmd.clear();
             e.pos       = 0;
             e.hist_idx  = -1;
             e.saved.clear();
@@ -579,32 +759,61 @@ std::string readline(editor& e) {
             }
             redraw(e); continue;
         }
-        if (vk == VK_HOME)  { e.pos = 0;                          redraw(e); continue; }
+        if (vk == VK_HOME) {
+            if (e.buf.find(L'\n') != std::wstring::npos)
+                e.pos = row_start(e.buf, row_of(e.buf, e.pos)); // start of current logical line
+            else
+                e.pos = 0;
+            redraw(e); continue;
+        }
         if (vk == VK_END) {
-            if (e.pos == (int)e.buf.size() && !e.hint.empty()) {
-                e.buf += e.hint;
-                e.hint.clear();
-                e.hist_idx = -1;
-                e.saved.clear();
-                e.plain_nav = true;
+            if (e.buf.find(L'\n') != std::wstring::npos) {
+                // end of current logical line (position of the \n, or buf end)
+                int rs = row_start(e.buf, row_of(e.buf, e.pos));
+                size_t nl = e.buf.find(L'\n', rs);
+                e.pos = (nl != std::wstring::npos) ? (int)nl : (int)e.buf.size();
+            } else {
+                if (e.pos == (int)e.buf.size() && !e.hint.empty()) {
+                    e.buf += e.hint;
+                    e.hint.clear();
+                    e.hist_idx  = -1;
+                    e.saved.clear();
+                    e.plain_nav = true;
+                }
+                e.pos = (int)e.buf.size();
             }
-            e.pos = (int)e.buf.size();
             redraw(e); continue;
         }
 
-        // -- UP: step backward through history --
-        // On first press, snapshots buf as the filter prefix (or empty if plain_nav).
-        // If a hint is already visible, anchors at that entry so UP immediately moves past it.
+        // -- UP: move to previous logical line in multiline buf, or step backward through history --
         if (vk == VK_UP) {
+            if (e.buf.find(L'\n') != std::wstring::npos && row_of(e.buf, e.pos) > 0) {
+                int r  = row_of(e.buf, e.pos);
+                int c  = col_of(e.buf, e.pos);
+                int rs = row_start(e.buf, r - 1);
+                size_t nl = e.buf.find(L'\n', rs);
+                int prev_len = (nl != std::wstring::npos) ? (int)(nl - rs) : (int)(e.buf.size() - rs);
+                e.pos = rs + std::min(c, prev_len);
+                redraw(e); continue;
+            }
             if (e.hist.empty()) continue;
             if (e.hist_idx == -1) enter_nav(e);
             nav_step(e, -1);
             continue;
         }
 
-        // -- DOWN: step forward through history --
-        // No-op in edit mode (hist_idx == -1); only active once UP has been pressed.
+        // -- DOWN: move to next logical line in multiline buf, or step forward through history --
         if (vk == VK_DOWN) {
+            int rcount = row_count(e.buf);
+            if (e.buf.find(L'\n') != std::wstring::npos && row_of(e.buf, e.pos) < rcount - 1) {
+                int r  = row_of(e.buf, e.pos);
+                int c  = col_of(e.buf, e.pos);
+                int rs = row_start(e.buf, r + 1);
+                size_t nl = e.buf.find(L'\n', rs);
+                int next_len = (nl != std::wstring::npos) ? (int)(nl - rs) : (int)(e.buf.size() - rs);
+                e.pos = rs + std::min(c, next_len);
+                redraw(e); continue;
+            }
             if (e.hist_idx == -1) continue;
             nav_step(e, +1);
             continue;
@@ -667,18 +876,27 @@ std::string readline(editor& e) {
         // -- Escape: hard reset --
         // Clears everything — buf, hint, nav state — back to a blank prompt.
         if (vk == VK_ESCAPE) {
-            e.buf.clear(); e.pos = 0; e.hint.clear(); e.hist_idx = -1; e.saved.clear(); redraw(e);
+            e.buf.clear(); e.pos = 0; e.hint.clear(); e.hist_idx = -1; e.saved.clear(); e.draft.clear(); redraw(e);
             continue;
         }
 
         // -- Ctrl+C: abort current line --
-        // Prints ^C, discards buf and any continuation segments, returns empty to signal no execution.
         if (ctrl && vk == 'C') {
             out("^C\r\n");
             e.buf.clear();
-            e.full_cmd.clear();
             e.pos = 0;
             return "";
+        }
+
+        // -- Ctrl+V / Shift+Insert: paste from clipboard --
+        // Read clipboard directly and discard ConHost's already-queued synthetic KEY_EVENTs
+        // so characters do not arrive twice. Works for both single-line and multiline content.
+        {
+            bool shift = (state & SHIFT_PRESSED) != 0;
+            if ((ctrl && vk == 'V') || (vk == VK_INSERT && shift)) {
+                do_paste(e);
+                continue;
+            }
         }
 
         // -- Printable character: insert and recalculate hint --
@@ -1069,7 +1287,7 @@ int run(const std::string& line) {
         return -1;
     SetConsoleMode(in_h, orig_in_mode);  // restore so Ctrl+C reaches child
     WaitForSingleObject(pi.hProcess, INFINITE);
-    SetConsoleMode(in_h, ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT);  // back to raw
+    SetConsoleMode(in_h, ENABLE_EXTENDED_FLAGS | ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT);  // back to raw
     DWORD code = 0;
     GetExitCodeProcess(pi.hProcess, &code);
     CloseHandle(pi.hProcess);
@@ -1747,7 +1965,6 @@ int main() {
         e.prompt_str  = p.str;
         e.prompt_vis  = p.vis;
         e.prev_pos    = 0;
-        e.full_cmd.clear();
         out(p.str);
 
         std::string line = readline(e);
