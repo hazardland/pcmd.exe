@@ -400,6 +400,13 @@ int term_width() {
     return 80;
 }
 
+int term_height() {
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(out_h, &csbi))
+        return csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    return 24;
+}
+
 // ---- multiline helpers ----
 // All helpers treat \n embedded in buf as logical line separators.
 // Continuation rows are rendered with a 2-char "> " prefix by redraw().
@@ -460,13 +467,16 @@ static int phys_col(const std::wstring& buf, int p, int prompt_vis, int width) {
     return col;
 }
 
-// Redraws the entire input line in place: moves up to the prompt row using prev_pos (where the
+// Redraws the entire input line in place: moves up to the prompt row using cursor_row (where the
 // cursor actually is), clears to end of screen, reprints prompt + buf + gray hint, then
 // repositions the cursor at e.pos. Handles multiline buf (embedded \n) by rendering each
-// logical line with a "> " continuation prefix. Batches all output into one write to avoid flicker.
+// logical line with a 2-space continuation indent. Batches all output into one write to avoid flicker.
 void redraw(editor& e) {
     int width   = term_width();
-    int cur_row = e.cursor_row;  // use stored row — buf may have changed since last render
+    int cur_row = e.cursor_row;
+
+    int max_up = term_height() - 1;
+    if (cur_row > max_up) cur_row = max_up;
 
     std::string s;
     if (cur_row > 0) {
@@ -515,12 +525,14 @@ void redraw(editor& e) {
 
     out(s);
     e.prev_pos   = e.pos;
-    e.cursor_row = pos_row;  // record where the cursor landed for the next redraw
+    e.cursor_row = pos_row;
 }
 
 // Inserts clipboard text at the current cursor position.
-// Normalises \r\n / lone \r to \n, strips trailing newlines, then inserts the block into buf.
-// Single-line text inserts normally; multiline text embeds \n chars and lets redraw show "> " prefixes.
+// Normalises \r\n / lone \r to \n, strips trailing newlines.
+// If every non-last segment ends with a \ or ^ continuation marker (bash/cmd multiline),
+// strips those markers and joins into a single line — avoids viewport overflow on large pastes.
+// Otherwise embeds \n chars and lets redraw show continuation prefixes.
 // Caller must have already called FlushConsoleInputBuffer to discard ConHost's synthetic KEY_EVENTs.
 static void paste_text(editor& e, const wchar_t* raw) {
     // Normalise line endings
@@ -536,6 +548,39 @@ static void paste_text(editor& e, const wchar_t* raw) {
     while (!text.empty() && text.back() == L'\n') text.pop_back();
     if (text.empty()) return;
 
+    // Join bash/cmd continuation lines: if all non-last lines end with \ or ^, merge into one
+    if (text.find(L'\n') != std::wstring::npos) {
+        bool all_cont = true;
+        size_t pos = 0;
+        while (pos < text.size()) {
+            size_t nl = text.find(L'\n', pos);
+            if (nl == std::wstring::npos) break;  // last segment — no continuation required
+            size_t e2 = nl;
+            while (e2 > pos && text[e2 - 1] == L' ') e2--;
+            if (e2 == pos || (text[e2 - 1] != L'\\' && text[e2 - 1] != L'^'))
+                { all_cont = false; break; }
+            pos = nl + 1;
+        }
+        if (all_cont) {
+            std::wstring joined;
+            pos = 0;
+            while (pos <= text.size()) {
+                size_t nl = text.find(L'\n', pos);
+                std::wstring seg = (nl == std::wstring::npos) ? text.substr(pos) : text.substr(pos, nl - pos);
+                while (!seg.empty() && seg.back() == L' ') seg.pop_back();
+                if (!seg.empty() && (seg.back() == L'\\' || seg.back() == L'^')) {
+                    seg.pop_back();
+                    while (!seg.empty() && seg.back() == L' ') seg.pop_back();
+                }
+                if (!joined.empty() && !seg.empty()) joined += L' ';
+                joined += seg;
+                if (nl == std::wstring::npos) break;
+                pos = nl + 1;
+            }
+            text = joined;
+        }
+    }
+
     e.hist_idx  = -1;
     e.plain_nav = false;
     e.hint.clear();
@@ -546,8 +591,11 @@ static void paste_text(editor& e, const wchar_t* raw) {
 }
 
 // Reads clipboard CF_UNICODETEXT and passes it to paste_text().
-// Flushes the console input queue first so ConHost's auto-injected KEY_EVENTs are discarded.
+// Flushes the console input queue before and after to discard ConHost's async-injected KEY_EVENTs.
+// The Sleep gives ConHost time to finish injecting before the second flush.
 static void do_paste(editor& e) {
+    FlushConsoleInputBuffer(in_h);
+    Sleep(5);
     FlushConsoleInputBuffer(in_h);
     if (!OpenClipboard(NULL)) return;
     HANDLE h = GetClipboardData(CF_UNICODETEXT);
@@ -556,6 +604,7 @@ static void do_paste(editor& e) {
         if (txt) { paste_text(e, txt); GlobalUnlock(h); }
     }
     CloseClipboard();
+    FlushConsoleInputBuffer(in_h);
 }
 
 // Advances history navigation one step in direction dir (-1 = UP/older, +1 = DOWN/newer).
@@ -671,7 +720,10 @@ std::string readline(editor& e) {
 
         // -- Enter: accumulate or submit --
         // Check the current logical line (segment after the last \n).
-        // If it ends with \ or ^, the user/paste is continuing — append \n to buf and keep editing.
+        // If it ends with \ or ^, the user/paste is continuing — append \n and keep editing.
+        // During a paste burst (more events already queued) advance the terminal one line
+        // forward instead of erasing and reprinting from the prompt: this avoids the
+        // erase+reprint scroll that made history lines appear to be eaten.
         // Otherwise join all accumulated lines (stripping continuation markers) and execute.
         if (vk == VK_RETURN) {
             // Find the current logical line (everything after the last \n in buf)
@@ -682,16 +734,18 @@ std::string readline(editor& e) {
             std::wstring trimmed = cur_line;
             while (!trimmed.empty() && trimmed.back() == L' ') trimmed.pop_back();
             if (!trimmed.empty() && (trimmed.back() == L'\\' || trimmed.back() == L'^')) {
-                // Continuation: store line break in buf, redraw the growing block, keep editing
                 e.hint.clear();
                 e.buf += L'\n';
                 e.pos = (int)e.buf.size();
+                // cursor_row is accurate (kept in sync by phys_rows in the char handler),
+                // so redraw can safely erase+reprint from the prompt row and also renders
+                // the \ continuation marker in gray. Works for both burst and interactive.
                 redraw(e);
                 continue;
             }
 
             if (e.hist_idx != -1 && !e.hint.empty()) e.buf += e.hint;
-            e.hint.clear(); redraw(e);
+            e.hint.clear(); e.pos = (int)e.buf.size(); redraw(e);
             out("\r\n");
 
             std::wstring full;
@@ -732,12 +786,20 @@ std::string readline(editor& e) {
         // -- Backspace / Delete: erase a character --
         // Both exit nav mode and reset plain_nav so the next UP re-filters from the new shorter buf.
         if (vk == VK_BACK) {
-            if (e.pos > 0) { e.hist_idx = -1; e.plain_nav = false; e.buf.erase(e.pos - 1, 1); e.pos--; find_hint(e); redraw(e); }
+            if (e.pos > 0) {
+                if (e.hist_idx != -1 && !e.hint.empty()) { e.buf += e.hint; }
+                e.hist_idx = -1; e.plain_nav = false;
+                e.buf.erase(e.pos - 1, 1); e.pos--; find_hint(e); redraw(e);
+            }
             continue;
         }
 
         if (vk == VK_DELETE) {
-            if (e.pos < (int)e.buf.size()) { e.hist_idx = -1; e.plain_nav = false; e.buf.erase(e.pos, 1); find_hint(e); redraw(e); }
+            if (e.pos < (int)e.buf.size()) {
+                if (e.hist_idx != -1 && !e.hint.empty()) { e.buf += e.hint; }
+                e.hist_idx = -1; e.plain_nav = false;
+                e.buf.erase(e.pos, 1); find_hint(e); redraw(e);
+            }
             continue;
         }
 
@@ -913,12 +975,22 @@ std::string readline(editor& e) {
         // Exits nav mode (any typed char abandons history browsing) and recomputes the ghost hint
         // from the new buf so it stays in sync with every keystroke.
         if (ch >= 32 && ch != 127) {
+            if (e.hist_idx != -1 && !e.hint.empty()) { e.buf += e.hint; }
             e.hist_idx = -1;
             e.plain_nav = false;
             e.buf.insert(e.pos, 1, ch);
             e.pos++;
             find_hint(e);
-            redraw(e);
+            DWORD nevents = 0;
+            GetNumberOfConsoleInputEvents(in_h, &nevents);
+            if (nevents > 0) {
+                // Paste burst: print char forward, track cursor_row via phys_rows.
+                // Avoids erase+reprint which scrolls history on physical line wraps.
+                e.cursor_row = phys_rows(e.buf, e.pos, e.prompt_vis, term_width());
+                out(to_utf8(std::wstring(1, ch)));
+            } else {
+                redraw(e);
+            }
         }
     }
     return "";
@@ -1984,6 +2056,7 @@ int main() {
         e.prompt_str  = p.str;
         e.prompt_vis  = p.vis;
         e.prev_pos    = 0;
+        e.cursor_row  = 0;
         out(p.str);
 
         std::string line = readline(e);
