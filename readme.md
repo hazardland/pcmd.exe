@@ -1,7 +1,5 @@
 # 2026 UPDATE: pcmd.exe (Moved from batch files to single executable)
 
-<img src="./images/pcmd.png" width="250" />
-
 ![Power CMD demo](./images/pcmd_cat_video.gif)
 
 ## Why
