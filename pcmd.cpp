@@ -321,6 +321,7 @@ struct editor {
     std::wstring buf;           // what the user has typed; multiline content uses embedded \n
     int pos        = 0;         // cursor position within buf (not screen column)
     int prev_pos   = 0;         // buf position as of last redraw; used to compute how many rows to move up
+    int cursor_row = 0;         // physical row the cursor is on after last redraw (0 = prompt row)
     int prompt_vis = 0;         // visual width of prompt_str (no ANSI codes); needed for screen-column math
     std::string prompt_str;     // stored so redraw can reprint it without recomputing
 
@@ -465,7 +466,7 @@ static int phys_col(const std::wstring& buf, int p, int prompt_vis, int width) {
 // logical line with a "> " continuation prefix. Batches all output into one write to avoid flicker.
 void redraw(editor& e) {
     int width   = term_width();
-    int cur_row = phys_rows(e.buf, e.prev_pos, e.prompt_vis, width);
+    int cur_row = e.cursor_row;  // use stored row — buf may have changed since last render
 
     std::string s;
     if (cur_row > 0) {
@@ -513,7 +514,8 @@ void redraw(editor& e) {
     s += col_esc;
 
     out(s);
-    e.prev_pos = e.pos;
+    e.prev_pos   = e.pos;
+    e.cursor_row = pos_row;  // record where the cursor landed for the next redraw
 }
 
 // Inserts clipboard text at the current cursor position.
@@ -881,12 +883,8 @@ std::string readline(editor& e) {
 
         // -- Escape: hard reset --
         // Clears everything — buf, hint, nav state — back to a blank prompt.
-        // In multiline mode the cursor may be rows below the prompt row; pre-move up before
-        // clearing buf so redraw (which uses buf to compute row offset) starts from the right row.
+        // cursor_row in redraw() handles moving up from any multiline position correctly.
         if (vk == VK_ESCAPE) {
-            int rows_up = phys_rows(e.buf, e.prev_pos, e.prompt_vis, term_width());
-            if (rows_up > 0) { char mv[32]; snprintf(mv, sizeof(mv), "\x1b[%dA", rows_up); out(mv); }
-            e.prev_pos = 0;
             e.buf.clear(); e.pos = 0; e.hint.clear(); e.hist_idx = -1; e.saved.clear(); e.draft.clear();
             redraw(e);
             continue;
