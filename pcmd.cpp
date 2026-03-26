@@ -881,8 +881,14 @@ std::string readline(editor& e) {
 
         // -- Escape: hard reset --
         // Clears everything — buf, hint, nav state — back to a blank prompt.
+        // In multiline mode the cursor may be rows below the prompt row; pre-move up before
+        // clearing buf so redraw (which uses buf to compute row offset) starts from the right row.
         if (vk == VK_ESCAPE) {
-            e.buf.clear(); e.pos = 0; e.hint.clear(); e.hist_idx = -1; e.saved.clear(); e.draft.clear(); redraw(e);
+            int rows_up = phys_rows(e.buf, e.prev_pos, e.prompt_vis, term_width());
+            if (rows_up > 0) { char mv[32]; snprintf(mv, sizeof(mv), "\x1b[%dA", rows_up); out(mv); }
+            e.prev_pos = 0;
+            e.buf.clear(); e.pos = 0; e.hint.clear(); e.hist_idx = -1; e.saved.clear(); e.draft.clear();
+            redraw(e);
             continue;
         }
 
