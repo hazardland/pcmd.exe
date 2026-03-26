@@ -72,6 +72,7 @@ void find_hint(editor& e) {
         return;
     }
     for (int i = (int)e.hist.size() - 1; i >= 0; i--) {
+        if (e.hist[i].find(L'\n') != std::wstring::npos) continue; // skip multiline entries
         if (e.hist[i].size() > e.buf.size() &&
             e.hist[i].substr(0, e.buf.size()) == e.buf) {
             e.hint = e.hist[i].substr(e.buf.size());
@@ -305,8 +306,12 @@ static void nav_step(editor& e, int dir) {
                     e.hist[i].substr(0, e.saved.size()) == e.saved) { found = i; break; }
             if (found == -1) return;
             e.hist_idx = found;
-            e.buf  = e.saved;
-            e.hint = e.hist[found].substr(e.saved.size());
+            if (e.hist[found].find(L'\n') != std::wstring::npos) {
+                e.buf = e.hist[found]; e.hint.clear(); // multiline: show as-is, no hint split
+            } else {
+                e.buf  = e.saved;
+                e.hint = e.hist[found].substr(e.saved.size());
+            }
         }
     } else {  // DOWN → newer
         int start = e.hist_idx + 1;
@@ -326,8 +331,12 @@ static void nav_step(editor& e, int dir) {
                     e.hist[i].substr(0, e.saved.size()) == e.saved) { found = i; break; }
             if (found == -1) return;
             e.hist_idx = found;
-            e.buf  = e.saved;
-            e.hint = e.hist[found].substr(e.saved.size());
+            if (e.hist[found].find(L'\n') != std::wstring::npos) {
+                e.buf = e.hist[found]; e.hint.clear(); // multiline: show as-is, no hint split
+            } else {
+                e.buf  = e.saved;
+                e.hint = e.hist[found].substr(e.saved.size());
+            }
         }
     }
     e.pos = (int)e.buf.size();
@@ -422,9 +431,12 @@ std::string readline(editor& e) {
 
             std::string line = to_utf8(full);
             if (!full.empty()) {
-                e.hist.erase(std::remove(e.hist.begin(), e.hist.end(), full), e.hist.end());
-                e.hist.push_back(full);
-                append_history(full);
+                // Store the display form (e.buf, multiline preserved) not the joined form.
+                // e.buf still has \n at this point; e.buf.clear() happens below.
+                std::wstring hist_entry = e.buf;
+                e.hist.erase(std::remove(e.hist.begin(), e.hist.end(), hist_entry), e.hist.end());
+                e.hist.push_back(hist_entry);
+                append_history(hist_entry);
             }
             e.buf.clear();
             e.pos       = 0;

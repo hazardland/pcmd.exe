@@ -87,7 +87,10 @@ void load_history(editor& e) {
     std::string line;
     std::vector<std::wstring> raw;
     while (std::getline(f, line)) {
-        if (!line.empty()) raw.push_back(to_wide(line));
+        if (!line.empty()) {
+            for (char& c : line) if (c == '\x1f') c = '\n';
+            raw.push_back(to_wide(line));
+        }
     }
     std::unordered_set<std::wstring> seen;
     for (int i = (int)raw.size() - 1; i >= 0; i--) {
@@ -98,9 +101,12 @@ void load_history(editor& e) {
 }
 
 // Appends a single command to the history file immediately (fish-style: no loss on crash).
+// Multiline commands: \n is encoded as \x1F (Unit Separator) so each entry stays one disk line.
 void append_history(const std::wstring& cmd) {
+    std::string s = to_utf8(cmd);
+    for (char& c : s) if (c == '\n') c = '\x1f';
     std::ofstream f(history_path(), std::ios::app);
-    f << to_utf8(cmd) << "\n";
+    f << s << "\n";
 }
 
 // Re-reads the history file, deduplicates keeping last occurrence, rewrites.
@@ -108,12 +114,20 @@ void compact_history() {
     std::string path = history_path();
     std::vector<std::wstring> raw;
     { std::ifstream f(path); std::string line;
-      while (std::getline(f, line)) if (!line.empty()) raw.push_back(to_wide(line)); }
+      while (std::getline(f, line)) if (!line.empty()) {
+          for (char& c : line) if (c == '\x1f') c = '\n';
+          raw.push_back(to_wide(line));
+      }
+    }
     std::vector<std::wstring> deduped;
     std::unordered_set<std::wstring> seen;
     for (int i = (int)raw.size() - 1; i >= 0; i--)
         if (seen.insert(raw[i]).second) deduped.push_back(raw[i]);
     std::reverse(deduped.begin(), deduped.end());
     std::ofstream f(path);
-    for (auto& e : deduped) f << to_utf8(e) << "\n";
+    for (auto& entry : deduped) {
+        std::string s = to_utf8(entry);
+        for (char& c : s) if (c == '\n') c = '\x1f';
+        f << s << "\n";
+    }
 }
