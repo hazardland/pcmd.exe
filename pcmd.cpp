@@ -4,11 +4,11 @@
 // Unity build: each src/ header is a self-contained module included in dependency order.
 // Include order matters — later modules may call functions defined in earlier ones.
 #include "src/common.h"   // includes, color macros, globals, out/err, to_utf8/to_wide
-#include "src/signal.h"   // ctrl_c_fired, g_editor, ctrl_handler, fwd-decls for persist
+#include "src/signal.h"   // ctrl_c_fired, g_input, ctrl_handler, fwd-decls for persist
 #include "src/info.h"     // elevated, cur_time, cwd, folder, branch, dirty
 #include "src/prompt.h"   // prompt_t, make_prompt
 #include "src/complete.h" // complete() — tab completion
-#include "src/editor.h"   // struct editor, find_hint, redraw, readline (calls append_history via fwd-decl)
+#include "src/input.h"    // struct input, find_hint, redraw, readline (calls append_history via fwd-decl)
 #include "src/persist.h"  // history, aliases, prev_dir (defines append_history used above)
 #include "src/commands.h" // cd, ls, run, run_bash, which, rule
 #include "src/image.h"    // cat_image, imgpush_cell (shared with video.h)
@@ -48,11 +48,11 @@ int main() {
     );
 
     bool elev = elevated();
-    editor e;
+    input e;
     load_history(e);
     load_prev_dir();
     load_aliases();
-    g_editor = &e;
+    g_input = &e;
 
     int last_code = 0;
     while (true) {

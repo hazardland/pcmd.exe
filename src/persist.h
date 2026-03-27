@@ -3,7 +3,7 @@
 // Exports : prev_dir last_session_dir | pcmd_dir() history_path() prev_dir_path() aliases_path()
 //           load_prev_dir() save_prev_dir() | aliases | load_aliases() write_alias() expand_alias()
 //           load_history() append_history() compact_history()
-// Depends : common.h, editor.h (struct editor used by load_history)
+// Depends : common.h, input.h (struct input used by load_history)
 
 static std::string prev_dir;
 static std::string last_session_dir;
@@ -82,7 +82,7 @@ std::string expand_alias(const std::string& line) {
 }
 
 // Reads .history into e.hist and deduplicates, keeping only the last occurrence of each command.
-void load_history(editor& e) {
+void load_history(input& e) {
     std::ifstream f(history_path());
     std::string line;
     std::vector<std::wstring> raw;
