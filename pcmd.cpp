@@ -16,6 +16,7 @@
 #include "src/video.h"    // cat_video (uses imgpush_cell from image.h)
 #include "src/highlight.h" // detect_lang, colorize_inline, colorize_line
 #include "src/cat.h"      // cat
+#include "src/edit.h"     // edit_file()
 
 int main() {
     out_h = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -150,6 +151,7 @@ int main() {
                 GREEN "cat" RESET "     Print file with syntax highlighting  | grep <word>\r\n"
                 "        Image files (jpg png bmp gif) rendered inline as 24-bit color block art\r\n"
                 "        Video files (mp4 mkv avi mov webm) played inline  Esc/Ctrl+C to stop  requires ffmpeg\r\n"
+                GREEN "edit" RESET "    Edit a file  edit path/to/file\r\n"
                 GREEN "which" RESET "   Locate a command in PATH or identify built-ins\r\n"
                 GREEN "alias" RESET "   alias ll=ls -l  define · alias ll  show · alias  list all\r\n"
                 GREEN "unalias" RESET " Remove an alias\r\n"
@@ -177,6 +179,14 @@ int main() {
             std::string arg = line.substr(6);
             while (!arg.empty() && arg.front() == ' ') arg.erase(arg.begin());
             last_code = which(arg);
+            continue;
+        }
+
+        if (lower.size() >= 5 && lower.substr(0, 5) == "edit ") {
+            std::string arg = line.substr(5);
+            while (!arg.empty() && arg.front() == ' ') arg.erase(arg.begin());
+            while (!arg.empty() && arg.back()  == ' ') arg.pop_back();
+            last_code = edit_file(arg);
             continue;
         }
 
