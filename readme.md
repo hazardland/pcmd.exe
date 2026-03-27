@@ -1,4 +1,4 @@
-# 2026 UPDATE: pcmd.exe (Moved from batch files to single executable)
+# Power CMD — A single executable shell for Windows
 
 ![Power CMD demo](./images/pcmd_cat_video.gif)
 
