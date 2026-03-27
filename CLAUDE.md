@@ -22,6 +22,7 @@
 - `build.bat` increments it automatically on each successful build and rolls back on failure
 - User resets or promotes version manually when needed (e.g. `0.1.0`, `1.0.0`)
 - Release titles use `pcmd v0.0.X` format (not "Power CMD v0.0.X")
+- Always attach `pcmd.exe` as a binary asset when creating a GitHub release
 
 ## Prompt / UI
 - Tool name: **Power CMD**

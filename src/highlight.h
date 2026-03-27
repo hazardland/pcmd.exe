@@ -4,7 +4,7 @@
 // Depends : common.h
 
 // Language detected from file extension; drives syntax highlight rules.
-enum class lang { none, cpp, py, js, json, md, bat, sol, php, go, rust, cs, java, sh, html };
+enum class lang { none, cpp, py, js, json, md, bat, sol, php, go, rust, cs, java, sh, html, yaml };
 
 static lang detect_lang(const std::string& path) {
     size_t dot = path.rfind('.');
@@ -25,6 +25,7 @@ static lang detect_lang(const std::string& path) {
     if (ext==".java")                                                 return lang::java;
     if (ext==".sh"||ext==".bash")                                     return lang::sh;
     if (ext==".html"||ext==".htm"||ext==".xml"||ext==".svg")         return lang::html;
+    if (ext==".yaml"||ext==".yml")                                    return lang::yaml;
     return lang::none;
 }
 
@@ -250,6 +251,44 @@ static std::string colorize_line(const std::string& line, lang l) {
             "true","false","wei","gwei","ether","seconds","minutes","hours","days","weeks"
         };
         return colorize_inline(line, kw, "//");
+    }
+    if (l == lang::yaml) {
+        if (!pfx.empty() && pfx[0] == '#')    return GRAY + line + RESET;
+        if (pfx == "---" || pfx == "...")      return YELLOW + line + RESET;
+        // key: [value]
+        size_t colon = pfx.find(':');
+        if (colon != std::string::npos &&
+            (colon + 1 >= pfx.size() || pfx[colon + 1] == ' ')) {
+            size_t lead = line.find_first_not_of(" \t");
+            std::string indent = (lead == std::string::npos) ? "" : line.substr(0, lead);
+            std::string result = indent + BLUE + pfx.substr(0, colon) + ":" + RESET;
+            std::string after  = pfx.substr(colon + 1);
+            if (!after.empty()) {
+                size_t vs = after.find_first_not_of(' ');
+                std::string sp  = vs == std::string::npos ? after : after.substr(0, vs);
+                std::string val = vs == std::string::npos ? "" : after.substr(vs);
+                std::string comment;
+                size_t hash = val.find(" #");
+                if (hash != std::string::npos) { comment = val.substr(hash); val = val.substr(0, hash); }
+                while (!val.empty() && val.back() == ' ') val.pop_back();
+                static const std::vector<std::string> boolnull = {
+                    "true","false","null","yes","no","True","False","Null","Yes","No"
+                };
+                bool is_bn = std::find(boolnull.begin(), boolnull.end(), val) != boolnull.end();
+                if      (val.empty())                           result += sp;
+                else if (is_bn)                                 result += sp + BLUE   + val + RESET;
+                else if (val[0] == '"' || val[0] == '\'')      result += sp + YELLOW + val + RESET;
+                else                                            result += sp + val;
+                if (!comment.empty()) result += GRAY + comment + RESET;
+            }
+            return result;
+        }
+        // list item: "- "
+        if (pfx.size() >= 2 && pfx[0] == '-' && pfx[1] == ' ') {
+            size_t dash = line.find('-');
+            return line.substr(0, dash) + GREEN + "-" + RESET + line.substr(dash + 1);
+        }
+        return line;
     }
     return line;
 }

@@ -152,6 +152,7 @@ int main() {
                 "        Image files (jpg png bmp gif) rendered inline as 24-bit color block art\r\n"
                 "        Video files (mp4 mkv avi mov webm) played inline  Esc/Ctrl+C to stop  requires ffmpeg\r\n"
                 GREEN "edit" RESET "    Edit a file  edit path/to/file\r\n"
+                GREEN "terminfo" RESET " Print terminal columns and rows\r\n"
                 GREEN "which" RESET "   Locate a command in PATH or identify built-ins\r\n"
                 GREEN "alias" RESET "   alias ll=ls -l  define · alias ll  show · alias  list all\r\n"
                 GREEN "unalias" RESET " Remove an alias\r\n"
@@ -165,6 +166,14 @@ int main() {
 
         if (lower == "version") {
             out("pcmd v" VERSION "\r\n");
+            last_code = 0;
+            continue;
+        }
+
+        if (lower == "terminfo") {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Columns: %d\r\nRows   : %d\r\n", term_width(), term_height());
+            out(buf);
             last_code = 0;
             continue;
         }
