@@ -131,7 +131,7 @@ static void top_cmd() {
                 SIZE_T mem=0;
                 if (GetProcessMemoryInfo(h,&pmc,sizeof(pmc))) mem=pmc.WorkingSetSize;
                 CloseHandle(h);
-                if (!name[0]) continue;
+                if (strlen(name) < 3) continue;
                 new_procs.push_back({pid,name,cpu,mem});
             }
             prev_times=curr_times; prev_wall=curr_wall; procs=new_procs;
