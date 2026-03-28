@@ -1,5 +1,7 @@
 # Zcmd — A single executable shell for Windows
 
+> Formerly **Powerline.bat** → **PowerCMD** → **Zcmd**
+
 ![Zcmd demo](./images/pcmd_cat_video.gif)
 
 ## Why
