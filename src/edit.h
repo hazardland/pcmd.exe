@@ -5,6 +5,17 @@
 
 static const int GUTTER = 4; // "%3d " — 3-digit line number + space
 
+struct edit_op {
+    int r0, c0;            // range start (byte offsets into lines)
+    int r1, c1;            // range end
+    std::string old_text;  // text that was removed (may contain \n)
+    std::string new_text;  // text that replaced it (may contain \n)
+    int cur_row_before, cur_col_before;
+    int cur_row_after,  cur_col_after;
+};
+
+static const int MAX_UNDO = 500;
+
 struct file_buf {
     std::vector<std::string> lines;
     bool crlf        = false;
@@ -20,6 +31,12 @@ struct file_buf {
 
     int sel_row = -1;  // anchor row; -1 = no selection
     int sel_col = -1;  // anchor col
+
+    std::vector<edit_op> undo_stack;
+    std::vector<edit_op> redo_stack;
+    bool last_was_char = false;  // consecutive word-char typing → merge
+    int  last_del_dir  = 0;      // -1=backspace, +1=fwd-delete, 0=none
+    int  saved_gen     = 0;      // undo_stack.size() at last save
 };
 
 // ---- UTF-8 helpers ----
@@ -128,6 +145,98 @@ static void delete_selection(file_buf& f) {
     f.cur_col   = ac;
     sel_clear(f);
     f.modified = true;
+}
+
+// ---- Undo / redo helpers ----
+
+// Extract text from f.lines in range (r0,c0)..(r1,c1) as \n-joined string.
+static std::string range_text(const file_buf& f, int r0, int c0, int r1, int c1) {
+    if (r0 == r1) return f.lines[r0].substr(c0, c1 - c0);
+    std::string txt = f.lines[r0].substr(c0);
+    for (int r = r0 + 1; r < r1; r++) { txt += '\n'; txt += f.lines[r]; }
+    txt += '\n';
+    txt += f.lines[r1].substr(0, c1);
+    return txt;
+}
+
+// Replace range (r0,c0)..(r1,c1) in f.lines with text (which may contain \n).
+static void apply_range(file_buf& f, int r0, int c0, int r1, int c1,
+                        const std::string& text) {
+    // split replacement text into lines
+    std::vector<std::string> parts;
+    std::string cur;
+    for (char c : text) {
+        if (c == '\n') { parts.push_back(cur); cur.clear(); }
+        else cur += c;
+    }
+    parts.push_back(cur);
+
+    std::string prefix = f.lines[r0].substr(0, c0);
+    std::string suffix = f.lines[r1].substr(c1);
+
+    // build replacement rows
+    std::vector<std::string> rows;
+    rows.reserve(parts.size());
+    for (int i = 0; i < (int)parts.size(); i++) {
+        if (i == 0 && i == (int)parts.size() - 1)
+            rows.push_back(prefix + parts[i] + suffix);
+        else if (i == 0)
+            rows.push_back(prefix + parts[i]);
+        else if (i == (int)parts.size() - 1)
+            rows.push_back(parts[i] + suffix);
+        else
+            rows.push_back(parts[i]);
+    }
+
+    f.lines.erase(f.lines.begin() + r0, f.lines.begin() + r1 + 1);
+    f.lines.insert(f.lines.begin() + r0, rows.begin(), rows.end());
+    if (f.lines.empty()) f.lines.push_back("");
+}
+
+// Push current state onto undo stack and clear redo stack.
+static void push_undo(file_buf& f, int r0, int c0, int r1, int c1,
+                      const std::string& old_text, const std::string& new_text,
+                      int cr_before, int cc_before,
+                      int cr_after,  int cc_after) {
+    if ((int)f.undo_stack.size() >= MAX_UNDO)
+        f.undo_stack.erase(f.undo_stack.begin());
+    f.undo_stack.push_back({r0, c0, r1, c1, old_text, new_text,
+                            cr_before, cc_before, cr_after, cc_after});
+    f.redo_stack.clear();
+}
+
+static void do_undo(file_buf& f) {
+    if (f.undo_stack.empty()) return;
+    const edit_op& op = f.undo_stack.back();
+    // compute end of new_text as inserted (to know the range to reverse)
+    int nr = op.r0, nc = op.c0;
+    for (char c : op.new_text) { if (c == '\n') { nr++; nc = 0; } else nc++; }
+    apply_range(f, op.r0, op.c0, nr, nc, op.old_text);
+    f.cur_row = op.cur_row_before;
+    f.cur_col = op.cur_col_before;
+    f.redo_stack.push_back(op);
+    f.undo_stack.pop_back();
+    f.sel_row = -1; f.sel_col = -1;
+    f.last_was_char = false;
+    f.last_del_dir  = 0;
+    f.modified = ((int)f.undo_stack.size() != f.saved_gen);
+}
+
+static void do_redo(file_buf& f) {
+    if (f.redo_stack.empty()) return;
+    const edit_op& op = f.redo_stack.back();
+    // compute end of old_text as it sits (to know the range to replace)
+    int nr = op.r0, nc = op.c0;
+    for (char c : op.old_text) { if (c == '\n') { nr++; nc = 0; } else nc++; }
+    apply_range(f, op.r0, op.c0, nr, nc, op.new_text);
+    f.cur_row = op.cur_row_after;
+    f.cur_col = op.cur_col_after;
+    f.undo_stack.push_back(op);
+    f.redo_stack.pop_back();
+    f.sel_row = -1; f.sel_col = -1;
+    f.last_was_char = false;
+    f.last_del_dir  = 0;
+    f.modified = ((int)f.undo_stack.size() != f.saved_gen);
 }
 
 // ---- Cursor clamping & scrolling ----
@@ -483,6 +592,7 @@ int edit_file(const std::string& path) {
 
         if (vk == VK_F2 || (ctrl && vk == 'S')) {
             save(f);
+            f.saved_gen = (int)f.undo_stack.size();
             draw(f, l);
             continue;
         }
@@ -527,6 +637,18 @@ int edit_file(const std::string& path) {
             continue;
         }
 
+        // ---- Undo / redo ----
+
+        if (ctrl && !shift && vk == 'Z') {
+            do_undo(f);
+            clamp_scroll(f, vis_rows, vis_w); draw(f, l); continue;
+        }
+
+        if ((ctrl && !shift && vk == 'Y') || (ctrl && shift && vk == 'Z')) {
+            do_redo(f);
+            clamp_scroll(f, vis_rows, vis_w); draw(f, l); continue;
+        }
+
         // ---- Clipboard ----
 
         if (ctrl && vk == 'A') {
@@ -544,7 +666,12 @@ int edit_file(const std::string& path) {
 
         if (ctrl && vk == 'X') {
             if (f.sel_row >= 0) {
+                int ar = f.sel_row, ac = f.sel_col, br = f.cur_row, bc = f.cur_col;
+                if (ar > br || (ar==br && ac>bc)) { std::swap(ar,br); std::swap(ac,bc); }
                 clipboard_set(to_wide(get_selection(f)));
+                push_undo(f, ar, ac, br, bc, range_text(f, ar, ac, br, bc), "",
+                          f.cur_row, f.cur_col, ar, ac);
+                f.last_was_char = false; f.last_del_dir = 0;
                 delete_selection(f);
                 clamp_scroll(f, vis_rows, vis_w);
             }
@@ -552,11 +679,25 @@ int edit_file(const std::string& path) {
             continue;
         }
 
-        if (ctrl && vk == 'Y') {
-            if (f.lines.size() > 1) {
-                f.lines.erase(f.lines.begin() + f.cur_row);
-                if (f.cur_row >= (int)f.lines.size()) f.cur_row = (int)f.lines.size()-1;
+        if ((ctrl && vk == 'D') || (ctrl && shift && vk == 'K')) {
+            // delete current line (Ctrl+D primary, Ctrl+Shift+K VSCode alias)
+            int cr = f.cur_row, cc = f.cur_col;
+            f.last_was_char = false; f.last_del_dir = 0;
+            if ((int)f.lines.size() > 1) {
+                if (cr < (int)f.lines.size() - 1) {
+                    push_undo(f, cr, 0, cr+1, 0, f.lines[cr]+"\n", "",
+                              cr, cc, cr, 0);
+                    f.lines.erase(f.lines.begin() + cr);
+                } else {
+                    int prev_len = (int)f.lines[cr-1].size();
+                    push_undo(f, cr-1, prev_len, cr, (int)f.lines[cr].size(),
+                              "\n"+f.lines[cr], "", cr, cc, cr-1, 0);
+                    f.lines.erase(f.lines.begin() + cr);
+                    f.cur_row = cr - 1;
+                }
             } else {
+                push_undo(f, 0, 0, 0, (int)f.lines[0].size(), f.lines[0], "",
+                          0, cc, 0, 0);
                 f.lines[0].clear();
             }
             f.cur_col = 0; f.sel_row = -1; f.modified = true;
@@ -564,7 +705,31 @@ int edit_file(const std::string& path) {
         }
 
         if (ctrl && vk == 'V') {
-            do_paste(f);
+            std::wstring wclip = clipboard_get();
+            if (!wclip.empty()) {
+                // normalize clipboard to \n — same logic as do_paste — to use as new_text
+                std::string raw = to_utf8(wclip);
+                std::string new_text;
+                new_text.reserve(raw.size());
+                for (size_t i = 0; i < raw.size(); i++) {
+                    if (raw[i] == '\r') { new_text += '\n'; if (i+1 < raw.size() && raw[i+1] == '\n') i++; }
+                    else new_text += raw[i];
+                }
+                int r0 = f.cur_row, c0 = f.cur_col;
+                int r1 = f.cur_row, c1 = f.cur_col;
+                std::string old_text;
+                if (f.sel_row >= 0) {
+                    int ar = f.sel_row, ac = f.sel_col, br = f.cur_row, bc = f.cur_col;
+                    if (ar > br || (ar==br && ac>bc)) { std::swap(ar,br); std::swap(ac,bc); }
+                    r0=ar; c0=ac; r1=br; c1=bc;
+                    old_text = range_text(f, r0, c0, r1, c1);
+                }
+                int cr_before = f.cur_row, cc_before = f.cur_col;
+                f.last_was_char = false; f.last_del_dir = 0;
+                do_paste(f);
+                push_undo(f, r0, c0, r1, c1, old_text, new_text,
+                          cr_before, cc_before, f.cur_row, f.cur_col);
+            }
             clamp_scroll(f, vis_rows, vis_w);
             draw(f, l);
             continue;
@@ -649,7 +814,17 @@ int edit_file(const std::string& path) {
         // ---- Editing ----
 
         if (vk == VK_RETURN) {
-            if (f.sel_row >= 0) delete_selection(f);
+            f.last_was_char = false; f.last_del_dir = 0;
+            if (f.sel_row >= 0) {
+                int ar = f.sel_row, ac = f.sel_col, br = f.cur_row, bc = f.cur_col;
+                if (ar > br || (ar==br && ac>bc)) { std::swap(ar,br); std::swap(ac,bc); }
+                push_undo(f, ar, ac, br, bc, range_text(f, ar, ac, br, bc), "\n",
+                          f.cur_row, f.cur_col, ar+1, 0);
+                delete_selection(f);
+            } else {
+                push_undo(f, f.cur_row, f.cur_col, f.cur_row, f.cur_col, "", "\n",
+                          f.cur_row, f.cur_col, f.cur_row+1, 0);
+            }
             std::string tail = f.lines[f.cur_row].substr(f.cur_col);
             f.lines[f.cur_row].erase(f.cur_col);
             f.lines.insert(f.lines.begin() + f.cur_row + 1, tail);
@@ -661,14 +836,37 @@ int edit_file(const std::string& path) {
 
         if (vk == VK_BACK) {
             if (f.sel_row >= 0) {
+                int ar = f.sel_row, ac = f.sel_col, br = f.cur_row, bc = f.cur_col;
+                if (ar > br || (ar==br && ac>bc)) { std::swap(ar,br); std::swap(ac,bc); }
+                push_undo(f, ar, ac, br, bc, range_text(f, ar, ac, br, bc), "",
+                          f.cur_row, f.cur_col, ar, ac);
+                f.last_was_char = false; f.last_del_dir = 0;
                 delete_selection(f);
             } else if (f.cur_col > 0) {
                 int prev = utf8_prev(f.lines[f.cur_row], f.cur_col);
+                std::string del = f.lines[f.cur_row].substr(prev, f.cur_col - prev);
+                bool can_group = f.last_del_dir == -1 && !f.undo_stack.empty() &&
+                                 f.undo_stack.back().new_text.empty() &&
+                                 f.undo_stack.back().r0 == f.cur_row &&
+                                 f.undo_stack.back().c0 == f.cur_col;
+                if (can_group) {
+                    f.undo_stack.back().old_text = del + f.undo_stack.back().old_text;
+                    f.undo_stack.back().c0 = prev;
+                    f.undo_stack.back().cur_col_after = prev;
+                    f.redo_stack.clear();
+                } else {
+                    push_undo(f, f.cur_row, prev, f.cur_row, f.cur_col, del, "",
+                              f.cur_row, f.cur_col, f.cur_row, prev);
+                    f.last_was_char = false; f.last_del_dir = -1;
+                }
                 f.lines[f.cur_row].erase(prev, f.cur_col - prev);
                 f.cur_col  = prev;
                 f.modified = true;
             } else if (f.cur_row > 0) {
                 int prev_len = (int)f.lines[f.cur_row - 1].size();
+                push_undo(f, f.cur_row-1, prev_len, f.cur_row, 0, "\n", "",
+                          f.cur_row, f.cur_col, f.cur_row-1, prev_len);
+                f.last_was_char = false; f.last_del_dir = 0;
                 f.lines[f.cur_row - 1] += f.lines[f.cur_row];
                 f.lines.erase(f.lines.begin() + f.cur_row);
                 f.cur_row--;
@@ -680,12 +878,34 @@ int edit_file(const std::string& path) {
 
         if (vk == VK_DELETE) {
             if (f.sel_row >= 0) {
+                int ar = f.sel_row, ac = f.sel_col, br = f.cur_row, bc = f.cur_col;
+                if (ar > br || (ar==br && ac>bc)) { std::swap(ar,br); std::swap(ac,bc); }
+                push_undo(f, ar, ac, br, bc, range_text(f, ar, ac, br, bc), "",
+                          f.cur_row, f.cur_col, ar, ac);
+                f.last_was_char = false; f.last_del_dir = 0;
                 delete_selection(f);
             } else if (f.cur_col < (int)f.lines[f.cur_row].size()) {
                 int next = utf8_next(f.lines[f.cur_row], f.cur_col);
+                std::string del = f.lines[f.cur_row].substr(f.cur_col, next - f.cur_col);
+                bool can_group = f.last_del_dir == 1 && !f.undo_stack.empty() &&
+                                 f.undo_stack.back().new_text.empty() &&
+                                 f.undo_stack.back().r0 == f.cur_row &&
+                                 f.undo_stack.back().c0 == f.cur_col;
+                if (can_group) {
+                    f.undo_stack.back().old_text += del;
+                    f.undo_stack.back().c1 = next;
+                    f.redo_stack.clear();
+                } else {
+                    push_undo(f, f.cur_row, f.cur_col, f.cur_row, next, del, "",
+                              f.cur_row, f.cur_col, f.cur_row, f.cur_col);
+                    f.last_was_char = false; f.last_del_dir = 1;
+                }
                 f.lines[f.cur_row].erase(f.cur_col, next - f.cur_col);
                 f.modified = true;
             } else if (f.cur_row < (int)f.lines.size() - 1) {
+                push_undo(f, f.cur_row, f.cur_col, f.cur_row+1, 0, "\n", "",
+                          f.cur_row, f.cur_col, f.cur_row, f.cur_col);
+                f.last_was_char = false; f.last_del_dir = 0;
                 f.lines[f.cur_row] += f.lines[f.cur_row + 1];
                 f.lines.erase(f.lines.begin() + f.cur_row + 1);
                 f.modified = true;
@@ -703,30 +923,43 @@ int edit_file(const std::string& path) {
                 }
                 return removed;
             };
+            int cr = f.cur_row, cc = f.cur_col;
+            f.last_was_char = false; f.last_del_dir = 0;
             if (f.sel_row >= 0) {
                 int ar = f.sel_row, br = f.cur_row;
                 if (ar > br) std::swap(ar, br);
+                int old_br_len = (int)f.lines[br].size();
+                std::string old_text = range_text(f, ar, 0, br, old_br_len);
                 for (int row = ar; row <= br; row++) dedent(row);
-                // clamp cols since lines may have shrunk
                 if (f.sel_col > (int)f.lines[f.sel_row].size()) f.sel_col = (int)f.lines[f.sel_row].size();
+                std::string new_text = range_text(f, ar, 0, br, (int)f.lines[br].size());
+                push_undo(f, ar, 0, br, old_br_len, old_text, new_text, cr, cc, f.cur_row, f.cur_col);
             } else {
-                dedent(f.cur_row);
+                std::string old_line = f.lines[cr];
+                dedent(cr);
+                if (f.lines[cr] != old_line)
+                    push_undo(f, cr, 0, cr, (int)old_line.size(), old_line, f.lines[cr], cr, cc, cr, cc);
             }
             f.modified = true;
             clamp_scroll(f, vis_rows, vis_w); draw(f, l); continue;
         }
 
         if (vk == VK_TAB) {
+            int cr = f.cur_row, cc = f.cur_col;
+            f.last_was_char = false; f.last_del_dir = 0;
             if (f.sel_row >= 0) {
                 // indent every selected line by 4 spaces
                 int ar = f.sel_row, br = f.cur_row;
                 if (ar > br) std::swap(ar, br);
-                for (int row = ar; row <= br; row++)
-                    f.lines[row].insert(0, 4, ' ');
-                f.sel_col += 4;
-                f.cur_col += 4;
+                int old_br_len = (int)f.lines[br].size();
+                std::string old_text = range_text(f, ar, 0, br, old_br_len);
+                for (int row = ar; row <= br; row++) f.lines[row].insert(0, 4, ' ');
+                f.sel_col += 4; f.cur_col += 4;
+                std::string new_text = range_text(f, ar, 0, br, (int)f.lines[br].size());
+                push_undo(f, ar, 0, br, old_br_len, old_text, new_text, cr, cc, f.cur_row, f.cur_col);
             } else {
-                f.lines[f.cur_row].insert(f.cur_col, 4, ' ');
+                push_undo(f, cr, cc, cr, cc, "", "    ", cr, cc, cr, cc+4);
+                f.lines[cr].insert(cc, 4, ' ');
                 f.cur_col += 4;
             }
             f.modified = true;
@@ -735,10 +968,84 @@ int edit_file(const std::string& path) {
 
         // printable character
         if (ch >= 32 && ch != 127 && !ctrl && !alt) {
-            if (f.sel_row >= 0) delete_selection(f);
-            std::string bytes = to_utf8(std::wstring(1, ch));
-            f.lines[f.cur_row].insert(f.cur_col, bytes);
-            f.cur_col += (int)bytes.size();
+            // drain any immediately pending chars — if the input buffer already has more,
+            // this is a paste arriving char-by-char; batch the whole burst into one undo op
+            std::wstring wbuf(1, ch);
+            {
+                DWORD pending = 0;
+                while (GetNumberOfConsoleInputEvents(in_h, &pending) && pending > 0) {
+                    INPUT_RECORD ir2; DWORD r2 = 0;
+                    if (!PeekConsoleInputW(in_h, &ir2, 1, &r2) || r2 == 0) break;
+                    if (ir2.EventType != KEY_EVENT || !ir2.Event.KeyEvent.bKeyDown) {
+                        ReadConsoleInputW(in_h, &ir2, 1, &r2); continue;
+                    }
+                    wchar_t ch2 = ir2.Event.KeyEvent.uChar.UnicodeChar;
+                    DWORD   st2 = ir2.Event.KeyEvent.dwControlKeyState;
+                    WORD    vk2 = ir2.Event.KeyEvent.wVirtualKeyCode;
+                    bool    ct2 = (st2 & (LEFT_CTRL_PRESSED|RIGHT_CTRL_PRESSED)) != 0;
+                    bool    al2 = (st2 & (LEFT_ALT_PRESSED|RIGHT_ALT_PRESSED)) != 0;
+                    if (ch2 >= 32 && ch2 != 127 && !ct2 && !al2) {
+                        ReadConsoleInputW(in_h, &ir2, 1, &r2); wbuf += ch2;
+                    } else if (vk2 == VK_RETURN && !ct2 && !al2) {
+                        ReadConsoleInputW(in_h, &ir2, 1, &r2); wbuf += L'\n';
+                    } else {
+                        break;  // non-paste event: leave it in the queue
+                    }
+                }
+            }
+            std::string bytes = to_utf8(wbuf);
+            bool is_batch  = (wbuf.size() > 1);
+            bool is_word   = !is_batch &&
+                             ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                              (ch >= '0' && ch <= '9') || ch == '_' || ch > 127);
+
+            // capture before-state
+            bool prev_was_char = f.last_was_char;
+            int cr_before = f.cur_row, cc_before = f.cur_col;
+            int r0 = f.cur_row, c0 = f.cur_col, r1 = f.cur_row, c1 = f.cur_col;
+            std::string old_text;
+            if (f.sel_row >= 0) {
+                int ar = f.sel_row, ac = f.sel_col, br = f.cur_row, bc = f.cur_col;
+                if (ar > br || (ar==br && ac>bc)) { std::swap(ar,br); std::swap(ac,bc); }
+                r0=ar; c0=ac; r1=br; c1=bc;
+                old_text = range_text(f, r0, c0, r1, c1);
+                delete_selection(f);
+            }
+            f.last_was_char = false; f.last_del_dir = 0;
+
+            // insert bytes — handles embedded newlines from batched paste
+            for (size_t i = 0; i < bytes.size(); ) {
+                if (bytes[i] == '\n') {
+                    std::string tail = f.lines[f.cur_row].substr(f.cur_col);
+                    f.lines[f.cur_row].erase(f.cur_col);
+                    f.lines.insert(f.lines.begin() + f.cur_row + 1, tail);
+                    f.cur_row++; f.cur_col = 0; i++;
+                } else {
+                    size_t nl = bytes.find('\n', i);
+                    if (nl == std::string::npos) nl = bytes.size();
+                    std::string chunk = bytes.substr(i, nl - i);
+                    f.lines[f.cur_row].insert(f.cur_col, chunk);
+                    f.cur_col += (int)chunk.size();
+                    i = nl;
+                }
+            }
+
+            // undo: batch or selection-replace → always own op; single word char → try group
+            bool can_group = is_word && prev_was_char && old_text.empty() &&
+                             !f.undo_stack.empty() &&
+                             f.undo_stack.back().old_text.empty() &&
+                             f.undo_stack.back().r0 == r0 &&
+                             f.undo_stack.back().cur_col_after == cc_before;
+            if (can_group) {
+                f.undo_stack.back().new_text += bytes;
+                f.undo_stack.back().cur_col_after = f.cur_col;
+                f.redo_stack.clear();
+            } else {
+                push_undo(f, r0, c0, r1, c1, old_text, bytes,
+                          cr_before, cc_before, f.cur_row, f.cur_col);
+            }
+            if (is_word) f.last_was_char = true;
+
             f.modified = true;
             clamp_scroll(f, vis_rows, vis_w); draw(f, l); continue;
         }
