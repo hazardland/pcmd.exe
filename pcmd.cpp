@@ -18,7 +18,6 @@
 #include "src/cat.h"      // cat
 #include "src/edit.h"     // edit_file()
 #include "src/matrix.h"  // matrix()
-#include "src/snow.h"    // snow_cmd()
 #include "src/note.h"    // note_cmd()
 #include "src/ip.h"      // ip_cmd()
 #include "src/calc.h"    // calc()
@@ -58,6 +57,20 @@ int main() {
         "\x1b[38;5;226m    \xe2\x96\x80\xe2\x96\x88\xe2\x96\x88 \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x80\r\n"  // CMD:     ▀██ █   █ ██▀
         RESET GRAY "PowerCmd v" VERSION RESET "\r\n"
     );
+    // Print Windows build info
+    {
+        HKEY hk;
+        char name[128]="Windows", build[32]="";
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",0,KEY_READ,&hk)==ERROR_SUCCESS) {
+            DWORD sz=sizeof(name);
+            RegQueryValueExA(hk,"ProductName",nullptr,nullptr,(LPBYTE)name,&sz);
+            sz=sizeof(build);
+            RegQueryValueExA(hk,"CurrentBuildNumber",nullptr,nullptr,(LPBYTE)build,&sz);
+            RegCloseKey(hk);
+        }
+        out(std::string(GRAY)+name+" Build "+build+RESET+"\r\n");
+    }
 
     bool elev = elevated();
     input e;
@@ -163,12 +176,11 @@ int main() {
                 GREEN "edit" RESET "    Edit a file  edit path/to/file\r\n"
                 GREEN "terminfo" RESET " Print terminal columns and rows\r\n"
                 GREEN "matrix" RESET "   Matrix digital rain screensaver  any key to exit\r\n"
-                GREEN "snow" RESET "     Falling snow screensaver  any key to exit\r\n"
-                GREEN "note" RESET "     Open ~/notes.md in the editor\r\n"
+                GREEN "notes" RESET "    Open ~/notes.md in the editor\r\n"
                 GREEN "ip" RESET "       Show local IPv4 addresses\r\n"
                 GREEN "top" RESET "      Interactive process viewer  [↑↓] navigate  [m/c] sort  [k] kill  [q] quit\r\n"
                 GREEN "clock" RESET "    Live fullscreen clock  any key to exit\r\n"
-                GREEN "timer" RESET "    Stopwatch counting up  any key stops and prints result\r\n"
+                GREEN "stopw" RESET "    Stopwatch counting up  any key stops and prints result\r\n"
                 GREEN "calc" RESET "     Evaluate arithmetic  calc (2+3)*4^2\r\n"
                 "        Alias: = (2+3)*4^2\r\n"
                 GREEN "clip" RESET "     Copy file to clipboard  clip path/to/file\r\n"
@@ -196,12 +208,6 @@ int main() {
             continue;
         }
 
-        if (lower == "snow") {
-            snow_cmd();
-            last_code = 0;
-            continue;
-        }
-
         if (lower == "ip") {
             last_code = ip_cmd();
             continue;
@@ -213,7 +219,7 @@ int main() {
             continue;
         }
 
-        if (lower == "note") {
+        if (lower == "notes") {
             last_code = note_cmd();
             continue;
         }
@@ -224,7 +230,7 @@ int main() {
             continue;
         }
 
-        if (lower == "timer") {
+        if (lower == "stopw") {
             timer_cmd();
             last_code = 0;
             continue;

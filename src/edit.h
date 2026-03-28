@@ -539,6 +539,17 @@ int edit_file(const std::string& path) {
             continue;
         }
 
+        if (ctrl && vk == 'Y') {
+            if (f.lines.size() > 1) {
+                f.lines.erase(f.lines.begin() + f.cur_row);
+                if (f.cur_row >= (int)f.lines.size()) f.cur_row = (int)f.lines.size()-1;
+            } else {
+                f.lines[0].clear();
+            }
+            f.cur_col = 0; f.sel_row = -1; f.modified = true;
+            clamp_scroll(f, vis_rows, vis_w); draw(f, l); continue;
+        }
+
         if (ctrl && vk == 'V') {
             do_paste(f);
             clamp_scroll(f, vis_rows, vis_w);
