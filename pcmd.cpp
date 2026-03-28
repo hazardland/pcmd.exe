@@ -18,6 +18,13 @@
 #include "src/cat.h"      // cat
 #include "src/edit.h"     // edit_file()
 #include "src/matrix.h"  // matrix()
+#include "src/snow.h"    // snow_cmd()
+#include "src/note.h"    // note_cmd()
+#include "src/ip.h"      // ip_cmd()
+#include "src/calc.h"    // calc()
+#include "src/clock.h"   // clock_cmd()
+#include "src/timer.h"   // timer_cmd()
+#include "src/json.h"    // json_fmt()
 
 int main() {
     out_h = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -155,6 +162,15 @@ int main() {
                 GREEN "edit" RESET "    Edit a file  edit path/to/file\r\n"
                 GREEN "terminfo" RESET " Print terminal columns and rows\r\n"
                 GREEN "matrix" RESET "   Matrix digital rain screensaver  any key to exit\r\n"
+                GREEN "snow" RESET "     Falling snow screensaver  any key to exit\r\n"
+                GREEN "note" RESET "     Open ~/notes.md in the editor\r\n"
+                GREEN "ip" RESET "       Show local IPv4 addresses\r\n"
+                GREEN "clock" RESET "    Live fullscreen clock  any key to exit\r\n"
+                GREEN "timer" RESET "    Stopwatch counting up  any key stops and prints result\r\n"
+                GREEN "calc" RESET "     Evaluate arithmetic  calc (2+3)*4^2\r\n"
+                "        Alias: = (2+3)*4^2\r\n"
+                GREEN "clip" RESET "     Copy file to clipboard  clip path/to/file\r\n"
+                GREEN "json" RESET "     Pretty-print JSON  json path/to/file\r\n"
                 GREEN "which" RESET "   Locate a command in PATH or identify built-ins\r\n"
                 GREEN "alias" RESET "   alias ll=ls -l  define · alias ll  show · alias  list all\r\n"
                 GREEN "unalias" RESET " Remove an alias\r\n"
@@ -175,6 +191,65 @@ int main() {
         if (lower == "matrix") {
             matrix();
             last_code = 0;
+            continue;
+        }
+
+        if (lower == "snow") {
+            snow_cmd();
+            last_code = 0;
+            continue;
+        }
+
+        if (lower == "ip") {
+            last_code = ip_cmd();
+            continue;
+        }
+
+        if (lower == "note") {
+            last_code = note_cmd();
+            continue;
+        }
+
+        if (lower == "clock") {
+            clock_cmd();
+            last_code = 0;
+            continue;
+        }
+
+        if (lower == "timer") {
+            timer_cmd();
+            last_code = 0;
+            continue;
+        }
+
+        if (lower.size() >= 5 && lower.substr(0, 5) == "calc ") {
+            last_code = calc(line.substr(5));
+            continue;
+        }
+
+        if (lower.size() >= 2 && lower.substr(0, 2) == "= ") {
+            last_code = calc(line.substr(2));
+            continue;
+        }
+
+        if (lower.size() >= 5 && lower.substr(0, 5) == "clip ") {
+            std::string path = line.substr(5);
+            while (!path.empty() && path.front() == ' ') path.erase(path.begin());
+            while (!path.empty() && path.back()  == ' ') path.pop_back();
+            std::ifstream f(path);
+            if (!f) { err("Cannot open: " + path + "\r\n"); last_code = 1; continue; }
+            std::string content((std::istreambuf_iterator<char>(f)), {});
+            clipboard_set(to_wide(content));
+            out("Copied to clipboard.\r\n");
+            last_code = 0;
+            continue;
+        }
+
+        if (lower.size() >= 5 && lower.substr(0, 5) == "json ") {
+            std::string path = line.substr(5);
+            while (!path.empty() && path.front() == ' ') path.erase(path.begin());
+            while (!path.empty() && path.back()  == ' ') path.pop_back();
+            last_code = json_fmt(path);
             continue;
         }
 

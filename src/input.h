@@ -68,6 +68,20 @@ void find_hint(input& e) {
             e.hint = matches[0].substr(token.size());
         return;
     }
+    if (lower.size() >= 5 && lower.substr(0, 5) == L"json ") {
+        std::wstring token = e.buf.substr(5);
+        auto matches = complete(token, false);
+        if (!matches.empty() && matches[0].size() > token.size())
+            e.hint = matches[0].substr(token.size());
+        return;
+    }
+    if (lower.size() >= 5 && lower.substr(0, 5) == L"clip ") {
+        std::wstring token = e.buf.substr(5);
+        auto matches = complete(token, false);
+        if (!matches.empty() && matches[0].size() > token.size())
+            e.hint = matches[0].substr(token.size());
+        return;
+    }
     // bare path prefixes: X:/ or ./ or ../
     bool is_path = (e.buf.size() >= 3 && iswalpha(e.buf[0]) && e.buf[1] == L':' && e.buf[2] == L'/') ||
                    (e.buf.size() >= 2 && e.buf[0] == L'.' && e.buf[1] == L'/') ||
