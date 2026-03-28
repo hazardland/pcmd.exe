@@ -4,14 +4,38 @@
 // Depends : common.h, terminal.h
 
 #include <psapi.h>
+#include <winternl.h>
 #include <cstdint>
 
 struct proc_entry {
     DWORD       pid;
     std::string name;
+    std::string path;
+    std::string cmdline;
     double      cpu;
     SIZE_T      mem;
 };
+
+static std::string get_cmdline(HANDLE h) {
+    typedef NTSTATUS (WINAPI *PFN)(HANDLE,PROCESSINFOCLASS,PVOID,ULONG,PULONG);
+    static PFN fn = (PFN)GetProcAddress(GetModuleHandleA("ntdll.dll"),"NtQueryInformationProcess");
+    if (!fn) return "";
+    PROCESS_BASIC_INFORMATION pbi={};
+    if (fn(h,ProcessBasicInformation,&pbi,sizeof(pbi),nullptr)!=0) return "";
+    PEB peb={};
+    SIZE_T rd=0;
+    if (!ReadProcessMemory(h,pbi.PebBaseAddress,&peb,sizeof(peb),&rd)) return "";
+    RTL_USER_PROCESS_PARAMETERS params={};
+    if (!ReadProcessMemory(h,peb.ProcessParameters,&params,sizeof(params),&rd)) return "";
+    if (!params.CommandLine.Length||!params.CommandLine.Buffer) return "";
+    std::wstring wbuf(params.CommandLine.Length/sizeof(wchar_t),L'\0');
+    if (!ReadProcessMemory(h,params.CommandLine.Buffer,&wbuf[0],params.CommandLine.Length,&rd)) return "";
+    // convert to narrow ASCII, replace non-ASCII with '?'
+    std::string out;
+    out.reserve(wbuf.size());
+    for (wchar_t wc:wbuf) out+=(wc<128?(char)wc:'?');
+    return out;
+}
 
 static std::string fmt_mem(SIZE_T bytes) {
     char buf[32];
@@ -62,7 +86,8 @@ static void top_cmd() {
     int  scroll_top = 0;
     bool fmode      = false;
     std::string fstr;
-    bool needs_clear = true;
+    bool needs_clear   = true;
+    bool prev_show_filter = false;
 
     std::unordered_map<DWORD,uint64_t> prev_times;
     ULONGLONG prev_wall = GetTickCount64();
@@ -130,9 +155,13 @@ static void top_cmd() {
                 PROCESS_MEMORY_COUNTERS pmc={}; pmc.cb=sizeof(pmc);
                 SIZE_T mem=0;
                 if (GetProcessMemoryInfo(h,&pmc,sizeof(pmc))) mem=pmc.WorkingSetSize;
+                char fullpath[MAX_PATH]={};
+                DWORD pathlen=MAX_PATH;
+                if (!QueryFullProcessImageNameA(h,0,fullpath,&pathlen)) fullpath[0]=0;
+                std::string cmdline=get_cmdline(h);
                 CloseHandle(h);
                 if (strlen(name) < 3) continue;
-                new_procs.push_back({pid,name,cpu,mem});
+                new_procs.push_back({pid,name,fullpath,cmdline,cpu,mem});
             }
             prev_times=curr_times; prev_wall=curr_wall; procs=new_procs;
             last_fetch=GetTickCount64();
@@ -167,9 +196,11 @@ static void top_cmd() {
             sticky_pid=filtered[sel]->pid;
         } else { sel=0; sticky_pid=0; }
 
-        int cols    = term_width();
-        int rows    = term_height();
-        int visible = rows-5;   // rows: summary + filter + separator + sep2 + statusbar
+        int cols       = term_width();
+        int rows       = term_height();
+        bool show_filter = fmode || !fstr.empty();
+        if (show_filter != prev_show_filter) { needs_clear=true; prev_show_filter=show_filter; }
+        int visible    = rows-(show_filter?5:4); // summary + sep + [filter] + sep + pathbar
         if (visible<1) visible=1;
 
         if (sel<scroll_top) scroll_top=sel;
@@ -192,30 +223,26 @@ static void top_cmd() {
         // Row 1 — Summary (dark bg)
         {
             char s[256];
-            snprintf(s,sizeof(s),"%.1f%% ",sys_cpu);
+            snprintf(s,sizeof(s),"%.1f%%",sys_cpu);
             char ru[32],rt[32];
             snprintf(ru,sizeof(ru),"%.1f",ram_used);
             snprintf(rt,sizeof(rt),"%.1f",ram_total);
             char p[256];
             snprintf(p,sizeof(p),"%d",(int)procs.size());
-            std::string line="  "+std::string(GRAY)+"CPU:"+BLUE+s+GRAY+"RAM:"+BLUE+ru+GRAY+"/"+BLUE+rt+GRAY+"GB "+GRAY+"PROCS:"+BLUE+p;
+            std::string line="  "+std::string(GRAY)+"CPU: "+BLUE+s+GRAY+"  RAM: "+BLUE+ru+GRAY+" / "+BLUE+rt+GRAY+" GB  "+GRAY+"PROCS: "+BLUE+p;
             // pad
-            int plain_len=2+4+(int)strlen(s)+4+(int)strlen(ru)+1+(int)strlen(rt)+3+6+(int)strlen(p);
+            int plain_len=2+5+(int)strlen(s)+7+(int)strlen(ru)+3+(int)strlen(rt)+5+7+(int)strlen(p);
             while (plain_len<cols) { line+=' '; plain_len++; }
             F+=line+"\x1b[0m\r\n";
         }
 
-        // Row 2 — Filter bar (always visible)
-        {
-            // "F" gray, "ilter: " white, then filter text
-            std::string line="  F"+std::string(GRAY)+"ilter: [";
-            int plain_len=12; // "  Filter: ["
+        // Row 2 (conditional) — Filter bar
+        if (show_filter) {
+            std::string line="  "+std::string(GRAY)+"[";
             if (fmode) {
                 line+=YELLOW+fstr+"_\x1b[39m";
-                plain_len+=(int)fstr.size()+1;
             } else {
                 line+=YELLOW+fstr+"\x1b[39m";
-                plain_len+=(int)fstr.size();
             }
             line+=std::string(GRAY)+"]\x1b[39m"+RESET;
             F+=line+"\x1b[K\x1b[0m\r\n";
@@ -228,7 +255,7 @@ static void top_cmd() {
             F+="\x1b[0m\r\n";
         }
 
-        // Rows 4..rows-1 — Process list
+        // Rows — Process list
         for (int i=scroll_top;i<scroll_top+visible;i++) {
             if (i>=(int)filtered.size()) {
                 F+="\x1b[2K\r\n";
@@ -269,21 +296,20 @@ static void top_cmd() {
         }
         F+="\x1b[J"; // clear any leftover rows
 
-        // Last row — Status bar (dark bg)
+        // Row n-1 / n — Path bar (shows full cmdline of selected process)
         {
-            // Left: " Mem  Cpu  Kill  Quit"  (21 chars plain)
-            // Key letter: GRAY, rest of word: YELLOW; active sort: key letter WHITE
-            std::string lc;
-            // key letter white, rest gray
-            lc+=" ";
-            lc+="M"+std::string(GRAY)+"em\x1b[39m";
-            lc+="  C"+std::string(GRAY)+"pu\x1b[39m";
-            lc+="  K"+std::string(GRAY)+"ill\x1b[39m";
-            lc+="  Q"+std::string(GRAY)+"uit\x1b[39m";
             F+=GRAY;
             for (int i=0;i<cols;i++) F+="\xe2\x94\x80";
             F+="\x1b[0m\r\n";
-            F+=lc;
+            std::string pathline;
+            if (!filtered.empty()) {
+                const proc_entry& sel_p=*filtered[sel];
+                std::string p=!sel_p.cmdline.empty()?sel_p.cmdline:(!sel_p.path.empty()?sel_p.path:sel_p.name);
+                for (auto& c:p) if (c=='\\') c='/';
+                if ((int)p.size()>cols-2) p=p.substr(0,cols-2);
+                pathline=" "+std::string(GRAY)+p+RESET;
+            }
+            F+=pathline;
             F+="\x1b[K\x1b[0m";
         }
 
@@ -346,7 +372,7 @@ static void top_cmd() {
                     if (ch=='k'&&!filtered.empty()) {
                         char conf[256];
                         snprintf(conf,sizeof(conf),
-                            "\x1b[%d;1H\x1b[2K\x1b[48;5;52m" RED "  Kill %s (pid %lu)? [y/n]  " RESET "\x1b[0m",
+                            "\x1b[%d;1H\x1b[2K\x1b[48;5;170m\x1b[30m  Kill %s (PID %lu)? [Y/N]  " RESET "\x1b[0m",
                             rows,filtered[sel]->name.c_str(),(unsigned long)filtered[sel]->pid);
                         out(conf);
                         bool answered=false;
@@ -356,6 +382,7 @@ static void top_cmd() {
                             while (kn-->0) {
                                 INPUT_RECORD kr; DWORD krd;
                                 ReadConsoleInputW(in_h,&kr,1,&krd);
+                                if (kr.EventType==WINDOW_BUFFER_SIZE_EVENT) { needs_clear=true; answered=true; break; }
                                 if (kr.EventType!=KEY_EVENT||!kr.Event.KeyEvent.bKeyDown) continue;
                                 wchar_t kch=towlower(kr.Event.KeyEvent.uChar.UnicodeChar);
                                 WORD    kvk=kr.Event.KeyEvent.wVirtualKeyCode;
