@@ -45,17 +45,17 @@ int main() {
     SetConsoleOutputCP(65001);
 
     out(
-        "\x1b[38;5;75m\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x84"                                                       // P: ███▄
+        "\x1b[38;5;75m\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88"                                                       // Z: ████
         "\x1b[38;5;226m \xe2\x96\x84\xe2\x96\x88\xe2\x96\x88 \xe2\x96\x88\xe2\x96\x84 \xe2\x96\x84\xe2\x96\x88 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x84\r\n"  // CMD:  ▄██ █▄ ▄█ ██▄
-        "\x1b[38;5;75m\xe2\x96\x88  \xe2\x96\x88"                                                                              // P: █  █
+        "\x1b[38;5;75m  \xe2\x96\x84\xe2\x96\x88"                                                                              // Z:   ▄█
         "\x1b[38;5;226m \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                  // CMD:  █   █ █ █ █ █
-        "\x1b[38;5;75m\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x80"                                                       // P: ███▀
+        "\x1b[38;5;75m \xe2\x96\x84\xe2\x96\x88 "                                                                              // Z:  ▄█
         "\x1b[38;5;226m \xe2\x96\x88   \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                             // CMD:  █   █   █ █ █
-        "\x1b[38;5;75m\xe2\x96\x88"                                                                                            // P: █
-        "\x1b[38;5;226m    \xe2\x96\x88   \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                          // CMD:     █   █   █ █ █
-        "\x1b[38;5;75m\xe2\x96\x88"                                                                                            // P: █
-        "\x1b[38;5;226m    \xe2\x96\x80\xe2\x96\x88\xe2\x96\x88 \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x80\r\n"  // CMD:     ▀██ █   █ ██▀
-        RESET GRAY "PowerCmd v" VERSION RESET "\r\n"
+        "\x1b[38;5;75m\xe2\x96\x84\xe2\x96\x88  "                                                                              // Z: ▄█
+        "\x1b[38;5;226m \xe2\x96\x88   \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                             // CMD:  █   █   █ █ █
+        "\x1b[38;5;75m\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88"                                                       // Z: ████
+        "\x1b[38;5;226m \xe2\x96\x80\xe2\x96\x88\xe2\x96\x88 \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x80\r\n"   // CMD:  ▀██ █   █ ██▀
+        RESET GRAY "Zcmd v" VERSION RESET "\r\n"
     );
     // Print Windows build info
     {
@@ -166,7 +166,7 @@ int main() {
 
         if (lower == "help") {
             out(
-                GREEN "version" RESET " Print pcmd version\r\n"
+                GREEN "version" RESET " Print zcmd version\r\n"
                 GREEN "pwd" RESET "     Print current directory\r\n"
                 GREEN "ls" RESET "      Colored listing  -a all  -s by size  -t by time  -l long  -r reverse  | grep <word>\r\n"
                 GREEN "cd" RESET "      Change directory  ~ home  - prev dir\r\n"
@@ -189,7 +189,7 @@ int main() {
                 GREEN "alias" RESET "   alias ll=ls -l  define · alias ll  show · alias  list all\r\n"
                 GREEN "unalias" RESET " Remove an alias\r\n"
                 GREEN "help" RESET "    Show this help\r\n"
-                GREEN "exit" RESET "    Exit pcmd\r\n"
+                GREEN "exit" RESET "    Exit zcmd\r\n"
                 GRAY "All other commands are passed to cmd.exe" RESET "\r\n"
             );
             last_code = 0;
@@ -197,7 +197,7 @@ int main() {
         }
 
         if (lower == "version") {
-            out("pcmd v" VERSION "\r\n");
+            out("zcmd v" VERSION "\r\n");
             last_code = 0;
             continue;
         }
