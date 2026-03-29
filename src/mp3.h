@@ -521,7 +521,8 @@ static std::string mp3_make_bars_locked(int elapsed_ms, int bar_count) {
     for (int i = 0; i < bar_count; i++) {
         int level = i < history_size ? (int)(history[i] + 0.5) : 0;
         level = std::max(0, std::min(level, 7));
-        bars += BRIGHT_YELLOW;
+        const char* color = (level <= 1) ? BLUE : (level >= 6) ? RED : BRIGHT_YELLOW;
+        bars += color;
         bars += glyphs[level];
         bars += RESET;
     }
