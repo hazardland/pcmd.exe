@@ -28,6 +28,75 @@ struct input {
     std::wstring tab_suf;                   // buf content after cursor at Tab-press time; reappended each cycle
 };
 
+struct token_info {
+    std::wstring text;
+    int start = 0;
+};
+
+static std::vector<token_info> split_tokens(const std::wstring& s, bool& trailing_space) {
+    std::vector<token_info> out;
+    std::wstring cur;
+    int start = -1;
+    wchar_t quote = 0;
+    trailing_space = false;
+    for (int i = 0; i < (int)s.size(); i++) {
+        wchar_t c = s[i];
+        if (quote) {
+            if (c == quote) {
+                quote = 0;
+            } else {
+                if (start == -1) start = i;
+                cur += c;
+            }
+            trailing_space = false;
+            continue;
+        }
+        if (c == L'"' || c == L'\'') {
+            quote = c;
+            if (start == -1) start = i + 1;
+            trailing_space = false;
+            continue;
+        }
+        if (c == L' ' || c == L'\t') {
+            if (!cur.empty() || start != -1) {
+                out.push_back({cur, start == -1 ? i : start});
+                cur.clear();
+                start = -1;
+            }
+            trailing_space = true;
+            continue;
+        }
+        if (start == -1) start = i;
+        cur += c;
+        trailing_space = false;
+    }
+    if (!cur.empty() || start != -1)
+        out.push_back({cur, start == -1 ? (int)s.size() : start});
+    return out;
+}
+
+static bool yt_path_token(const std::wstring& s, int& start, std::wstring& token) {
+    bool trailing_space = false;
+    std::vector<token_info> parts = split_tokens(s, trailing_space);
+    if (parts.size() < 2) return false;
+    std::wstring cmd = parts[0].text;
+    std::wstring mode = parts[1].text;
+    std::transform(cmd.begin(), cmd.end(), cmd.begin(), ::towlower);
+    std::transform(mode.begin(), mode.end(), mode.begin(), ::towlower);
+    if (cmd != L"yt" || (mode != L"mp3" && mode != L"mp4")) return false;
+    if (parts.size() == 3 && trailing_space) {
+        start = (int)s.size();
+        token.clear();
+        return true;
+    }
+    if (parts.size() == 4) {
+        start = parts[3].start;
+        token = parts[3].text;
+        return true;
+    }
+    return false;
+}
+
 // Calculates the ghost hint for the current buf in edit mode (hist_idx == -1).
 // For "cd <path>" uses filesystem completions (dirs only); for "ls <path>" files+dirs;
 // for bare paths (X:/, ./, ../) uses filesystem completions directly;
@@ -96,6 +165,16 @@ void find_hint(input& e) {
         if (!matches.empty() && matches[0].size() > token.size())
             e.hint = matches[0].substr(token.size());
         return;
+    }
+    {
+        int start = 0;
+        std::wstring token;
+        if (yt_path_token(e.buf, start, token)) {
+            auto matches = complete(token, true);
+            if (!matches.empty() && matches[0].size() > token.size())
+                e.hint = matches[0].substr(token.size());
+            return;
+        }
     }
     // bare path prefixes: X:/ or ./ or ../
     bool is_path = (e.buf.size() >= 3 && iswalpha(e.buf[0]) && e.buf[1] == L':' && e.buf[2] == L'/') ||
@@ -563,11 +642,11 @@ std::string readline(input& e) {
         if (vk == VK_TAB) {
             if (!e.tab_on) {
                 std::wstring before = e.buf.substr(0, e.pos);
+                std::wstring lower_buf = e.buf;
+                std::transform(lower_buf.begin(), lower_buf.end(), lower_buf.begin(), ::towlower);
                 size_t space = before.find_last_of(L" \t");
                 int start = (space == std::wstring::npos) ? 0 : (int)space + 1;
                 std::wstring token = before.substr(start);
-                std::wstring lower_buf = e.buf;
-                std::transform(lower_buf.begin(), lower_buf.end(), lower_buf.begin(), ::towlower);
                 bool dirs_only = (lower_buf.substr(0, 3) == L"cd " || lower_buf == L"cd" ||
                                   lower_buf.substr(0, 3) == L"ls " || lower_buf == L"ls");
                 if (lower_buf.substr(0, 4) == L"mp3 " || lower_buf.substr(0, 5) == L"play ") {
@@ -580,6 +659,8 @@ std::string readline(input& e) {
                         mp3_lower.substr(0, 4) == L"vol ")
                         continue;
                 }
+                if (yt_path_token(before, start, token))
+                    dirs_only = true;
                 e.tab_matches = complete(token, dirs_only);
                 if (e.tab_matches.empty()) continue;
                 e.tab_on    = true;
@@ -594,9 +675,18 @@ std::string readline(input& e) {
                     std::transform(lower_buf.begin(), lower_buf.end(), lower_buf.begin(), ::towlower);
                     bool dirs_only = (lower_buf.substr(0, 3) == L"cd " || lower_buf == L"cd" ||
                                       lower_buf.substr(0, 3) == L"ls " || lower_buf == L"ls");
+                    std::wstring path_token = cur;
+                    std::wstring before = e.tab_pre + cur;
+                    int yt_start = 0;
+                    std::wstring yt_token;
+                    if (yt_path_token(before, yt_start, yt_token)) {
+                        dirs_only = true;
+                        path_token = yt_token;
+                    }
                     std::wstring new_token = e.tab_pre + cur;
                     size_t space = new_token.find_last_of(L" \t");
-                    std::wstring path_token = (space == std::wstring::npos) ? new_token : new_token.substr(space + 1);
+                    if (!dirs_only || !yt_path_token(before, yt_start, yt_token))
+                        path_token = (space == std::wstring::npos) ? new_token : new_token.substr(space + 1);
                     auto matches = complete(path_token, dirs_only);
                     if (!matches.empty()) {
                         e.tab_matches = matches;

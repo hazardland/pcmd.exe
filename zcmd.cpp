@@ -26,6 +26,7 @@
 #include "src/json.h"    // json_fmt()
 #include "src/top.h"     // top_cmd()
 #include "src/mp3.h"     // mp3_cmd(), mp3_shutdown()
+#include "src/yt.h"      // yt_cmd()
 
 int main() {
     out_h = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -184,6 +185,7 @@ int main() {
                 GREEN "stopw" RESET "    Stopwatch counting up  any key stops and prints result\r\n"
                 GREEN "mp3" RESET "      Play MP3 files  pause/resume/stop/vol/status/ui\r\n"
                 GREEN "play" RESET "     Hardcoded alias for mp3\r\n"
+                GREEN "yt" RESET "       YouTube downloader  yt mp3 <url> [folder]  yt mp4 <url> [folder]\r\n"
                 GREEN "calc" RESET "     Evaluate arithmetic  calc (2+3)*4^2\r\n"
                 "        Alias: = (2+3)*4^2\r\n"
                 GREEN "clip" RESET "     Copy file to clipboard  clip path/to/file\r\n"
@@ -241,6 +243,11 @@ int main() {
 
         if (lower == "mp3" || (lower.size() >= 4 && lower.substr(0, 4) == "mp3 ")) {
             last_code = mp3_cmd(line);
+            continue;
+        }
+
+        if (lower == "yt" || (lower.size() >= 3 && lower.substr(0, 3) == "yt ")) {
+            last_code = yt_cmd(line);
             continue;
         }
 
