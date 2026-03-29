@@ -25,6 +25,7 @@
 #include "src/timer.h"   // timer_cmd()
 #include "src/json.h"    // json_fmt()
 #include "src/top.h"     // top_cmd()
+#include "src/mp3.h"     // mp3_cmd(), mp3_shutdown()
 
 int main() {
     out_h = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -45,16 +46,16 @@ int main() {
     SetConsoleOutputCP(65001);
 
     out(
-        "\x1b[38;5;75m\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88"                                                       // Z: ████
-        "\x1b[38;5;226m \xe2\x96\x84\xe2\x96\x88\xe2\x96\x88 \xe2\x96\x88\xe2\x96\x84 \xe2\x96\x84\xe2\x96\x88 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x84\r\n"  // CMD:  ▄██ █▄ ▄█ ██▄
-        "\x1b[38;5;75m  \xe2\x96\x84\xe2\x96\x88"                                                                              // Z:   ▄█
-        "\x1b[38;5;226m \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                  // CMD:  █   █ █ █ █ █
-        "\x1b[38;5;75m \xe2\x96\x84\xe2\x96\x88 "                                                                              // Z:  ▄█
-        "\x1b[38;5;226m \xe2\x96\x88   \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                             // CMD:  █   █   █ █ █
-        "\x1b[38;5;75m\xe2\x96\x84\xe2\x96\x88  "                                                                              // Z: ▄█
-        "\x1b[38;5;226m \xe2\x96\x88   \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                             // CMD:  █   █   █ █ █
-        "\x1b[38;5;75m\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88"                                                       // Z: ████
-        "\x1b[38;5;226m \xe2\x96\x80\xe2\x96\x88\xe2\x96\x88 \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x80\r\n"   // CMD:  ▀██ █   █ ██▀
+        BLUE "\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88"                                                       // Z: ████
+        BRIGHT_YELLOW " \xe2\x96\x84\xe2\x96\x88\xe2\x96\x88 \xe2\x96\x88\xe2\x96\x84 \xe2\x96\x84\xe2\x96\x88 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x84\r\n"  // CMD:  ▄██ █▄ ▄█ ██▄
+        BLUE "  \xe2\x96\x84\xe2\x96\x88"                                                                              // Z:   ▄█
+        BRIGHT_YELLOW " \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                  // CMD:  █   █ █ █ █ █
+        BLUE " \xe2\x96\x84\xe2\x96\x88 "                                                                              // Z:  ▄█
+        BRIGHT_YELLOW " \xe2\x96\x88   \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                             // CMD:  █   █   █ █ █
+        BLUE "\xe2\x96\x84\xe2\x96\x88  "                                                                              // Z: ▄█
+        BRIGHT_YELLOW " \xe2\x96\x88   \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88 \xe2\x96\x88\r\n"                             // CMD:  █   █   █ █ █
+        BLUE "\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88"                                                       // Z: ████
+        BRIGHT_YELLOW " \xe2\x96\x80\xe2\x96\x88\xe2\x96\x88 \xe2\x96\x88   \xe2\x96\x88 \xe2\x96\x88\xe2\x96\x88\xe2\x96\x80\r\n"   // CMD:  ▀██ █   █ ██▀
         RESET GRAY "Zcmd v" VERSION RESET "\r\n"
     );
     // Print Windows build info
@@ -114,7 +115,7 @@ int main() {
         std::string lower = line;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
 
-        if (lower == "exit") { compact_history(); save_prev_dir(); break; }
+        if (lower == "exit") { mp3_shutdown(); compact_history(); save_prev_dir(); break; }
 
         // alias / unalias
         if (lower == "alias") {
@@ -181,6 +182,8 @@ int main() {
                 GREEN "top" RESET "      Interactive process viewer  [↑↓] navigate  [m/c] sort  [k] kill  [q] quit\r\n"
                 GREEN "clock" RESET "    Live fullscreen clock  any key to exit\r\n"
                 GREEN "stopw" RESET "    Stopwatch counting up  any key stops and prints result\r\n"
+                GREEN "mp3" RESET "      Play MP3 files  pause/resume/stop/vol/status/ui\r\n"
+                GREEN "play" RESET "     Hardcoded alias for mp3\r\n"
                 GREEN "calc" RESET "     Evaluate arithmetic  calc (2+3)*4^2\r\n"
                 "        Alias: = (2+3)*4^2\r\n"
                 GREEN "clip" RESET "     Copy file to clipboard  clip path/to/file\r\n"
@@ -233,6 +236,11 @@ int main() {
         if (lower == "stopw") {
             timer_cmd();
             last_code = 0;
+            continue;
+        }
+
+        if (lower == "mp3" || (lower.size() >= 4 && lower.substr(0, 4) == "mp3 ")) {
+            last_code = mp3_cmd(line);
             continue;
         }
 
@@ -416,5 +424,7 @@ int main() {
         }
     }
 
+    mp3_shutdown();
     return 0;
 }
+

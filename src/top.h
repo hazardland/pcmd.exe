@@ -59,7 +59,7 @@ static const char* cpu_col(double pct) {
 }
 
 static const char* mem_col(SIZE_T b) {
-    if (b>=(SIZE_T)100*1024*1024) return "\x1b[1;35m"; // bold magenta, same as ls images
+    if (b>=(SIZE_T)100*1024*1024) return MAGENTA; // bold magenta, same as ls images
     return GRAY;
 }
 

@@ -68,6 +68,21 @@ void find_hint(input& e) {
             e.hint = matches[0].substr(token.size());
         return;
     }
+    if (lower.size() >= 4 && (lower.substr(0, 4) == L"mp3 " || lower.substr(0, 5) == L"play ")) {
+        int cmd_len = (lower.size() >= 5 && lower.substr(0, 5) == L"play ") ? 5 : 4;
+        std::wstring token = e.buf.substr(cmd_len);
+        std::wstring token_lower = token;
+        std::transform(token_lower.begin(), token_lower.end(), token_lower.begin(), ::towlower);
+        if (token_lower == L"pause" || token_lower == L"resume" || token_lower == L"stop" ||
+            token_lower == L"status" || token_lower == L"ui" ||
+            token_lower.substr(0, 4) == L"vol ") {
+            return;
+        }
+        auto matches = complete(token, false);
+        if (!matches.empty() && matches[0].size() > token.size())
+            e.hint = matches[0].substr(token.size());
+        return;
+    }
     if (lower.size() >= 5 && lower.substr(0, 5) == L"json ") {
         std::wstring token = e.buf.substr(5);
         auto matches = complete(token, false);
@@ -555,6 +570,16 @@ std::string readline(input& e) {
                 std::transform(lower_buf.begin(), lower_buf.end(), lower_buf.begin(), ::towlower);
                 bool dirs_only = (lower_buf.substr(0, 3) == L"cd " || lower_buf == L"cd" ||
                                   lower_buf.substr(0, 3) == L"ls " || lower_buf == L"ls");
+                if (lower_buf.substr(0, 4) == L"mp3 " || lower_buf.substr(0, 5) == L"play ") {
+                    int cmd_len = (lower_buf.substr(0, 5) == L"play ") ? 5 : 4;
+                    std::wstring mp3_arg = before.substr(cmd_len);
+                    std::wstring mp3_lower = mp3_arg;
+                    std::transform(mp3_lower.begin(), mp3_lower.end(), mp3_lower.begin(), ::towlower);
+                    if (mp3_lower == L"pause" || mp3_lower == L"resume" || mp3_lower == L"stop" ||
+                        mp3_lower == L"status" || mp3_lower == L"ui" ||
+                        mp3_lower.substr(0, 4) == L"vol ")
+                        continue;
+                }
                 e.tab_matches = complete(token, dirs_only);
                 if (e.tab_matches.empty()) continue;
                 e.tab_on    = true;

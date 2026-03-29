@@ -13,6 +13,11 @@
 #include <sstream>
 #include <unordered_set>
 #include <unordered_map>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <cstring>
+#include <cmath>
 
 #ifndef VERSION_MINOR
 #define VERSION_MINOR 0
@@ -25,6 +30,8 @@
 #define BLUE   "\x1b[38;5;75m"
 #define RED    "\x1b[38;5;203m"
 #define YELLOW "\x1b[38;5;229m"
+#define BRIGHT_YELLOW "\x1b[38;5;226m"
+#define MAGENTA "\x1b[1;35m"
 #define GREEN  "\x1b[38;5;114m"
 #define RESET  "\x1b[0m"
 
