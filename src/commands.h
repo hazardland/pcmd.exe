@@ -67,7 +67,7 @@ static std::string ls_color(const WIN32_FIND_DATAW& fd) {
     if (ext == L".jpg"  || ext == L".jpeg" || ext == L".png"  || ext == L".gif"  ||
         ext == L".bmp"  || ext == L".tif"  || ext == L".tiff" || ext == L".svg"  ||
         ext == L".webp" || ext == L".ico"  || ext == L".raw"  || ext == L".heic")
-        return "\x1b[1;35m";
+        return MAGENTA;
 
     if (ext == L".mp3"  || ext == L".wav"  || ext == L".ogg"  || ext == L".flac" ||
         ext == L".aac"  || ext == L".m4a"  || ext == L".wma"  ||
@@ -279,7 +279,7 @@ int run_bash(const std::string& line) {
 int which(const std::string& arg) {
     std::string argl = arg;
     std::transform(argl.begin(), argl.end(), argl.begin(), ::tolower);
-    static const std::vector<std::string> builtins = {"ls","cd","pwd","cat","exit","which","help","version","alias","unalias"};
+    static const std::vector<std::string> builtins = {"ls","cd","pwd","cat","exit","which","help","version","alias","unalias","mp3","play"};
     for (auto& b : builtins) {
         if (argl == b) { out(arg + ": zcmd built-in\r\n"); return 0; }
     }

@@ -74,6 +74,11 @@ std::string expand_alias(const std::string& line) {
     std::string name = sp == std::string::npos ? line : line.substr(0, sp);
     std::string namel = name;
     std::transform(namel.begin(), namel.end(), namel.begin(), ::tolower);
+    if (namel == "play") {
+        std::string expanded = "mp3";
+        if (sp != std::string::npos) expanded += line.substr(sp);
+        return expanded;
+    }
     auto it = aliases.find(namel);
     if (it == aliases.end()) return "";
     std::string expanded = it->second;
