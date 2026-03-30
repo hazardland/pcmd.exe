@@ -1,15 +1,29 @@
 <script setup>
 import { features } from './data/features'
 
-const heroDemo = features[0]
 const heroVideo = '/videos/header.mp4'
 const heroRatio = '8 / 11'
 const heroTopTrim = '5.8%'
 const heroChromeHeight = '42px'
+
+const tools = [
+  { cmd: 'ls',    desc: 'list files with color' },
+  { cmd: 'top',   desc: 'interactive process viewer' },
+  { cmd: 'play',  desc: 'mp3 player with visualizer' },
+  { cmd: 'img',   desc: 'render images in terminal' },
+  { cmd: 'calc',  desc: 'inline calculator' },
+  { cmd: 'clock', desc: 'live time display' },
+  { cmd: 'alias', desc: 'command shortcuts' },
+  { cmd: 'json',  desc: 'pretty-print json' },
+  { cmd: 'clip',  desc: 'clipboard helpers' },
+  { cmd: 'note',  desc: 'quick notes' },
+  { cmd: 'ip',    desc: 'network info' },
+  { cmd: 'stop',  desc: 'stopwatch' },
+]
 </script>
 
 <template>
-  <div class="site-shell">
+  <div class="site-shell" id="top">
     <div class="atmosphere">
       <div class="halo halo-blue"></div>
       <div class="halo halo-gold"></div>
@@ -17,17 +31,42 @@ const heroChromeHeight = '42px'
       <div class="grid-fade"></div>
     </div>
 
-    <header class="hero">
-      <nav class="topbar">
-        <div class="brand">ZCMD.DEV</div>
-        <div class="topbar-links">
-          <a href="#features">Features</a>
-          <a href="#install">Install</a>
-          <a href="https://github.com/hazardland/zcmd" target="_blank" rel="noreferrer">GitHub</a>
-        </div>
-      </nav>
+    <header class="site-header">
+      <div class="site-header-shell">
+        <nav class="topbar" aria-label="Primary">
+          <a class="brand-lockup" href="#top" aria-label="Zcmd homepage">
+            <span class="brand-mark">
+              <span class="brand-bracket">[</span>zcmd<span class="brand-bracket">]</span><span class="brand-chevron">&gt;</span>
+            </span>
+            <span class="brand-copy">
+              <strong>Zcmd</strong>
+              <span>Windows-first shell</span>
+            </span>
+          </a>
 
-      <section class="hero-grid">
+          <div class="topbar-nav">
+            <a href="#features">Features</a>
+            <a href="#install">Install</a>
+            <a href="#more-tools">Built-ins</a>
+          </div>
+
+          <div class="topbar-actions">
+            <span class="topbar-status">single exe / zero config</span>
+            <a
+              class="topbar-cta"
+              href="https://github.com/hazardland/zcmd"
+              target="_blank"
+              rel="noreferrer"
+            >
+              GitHub
+            </a>
+          </div>
+        </nav>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="hero-grid">
         <div class="hero-copy">
           <p class="eyebrow">Windows-first shell</p>
           <h1>Zcmd is a visually refined shell for Windows developers: a fast, single-file, zero-config C++ alternative to cmd.exe.</h1>
@@ -45,14 +84,12 @@ const heroChromeHeight = '42px'
           <div class="hero-actions">
             <a class="button button-primary" href="https://github.com/hazardland/zcmd/releases/latest" target="_blank" rel="noreferrer">
               <span>Download Latest</span>
-              <small>GitHub Release</small>
             </a>
             <a class="button button-secondary" href="https://github.com/hazardland/zcmd" target="_blank" rel="noreferrer">
               <svg class="link-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56v-1.97c-3.2.7-3.88-1.35-3.88-1.35-.52-1.33-1.28-1.68-1.28-1.68-1.04-.72.08-.71.08-.71 1.15.08 1.75 1.18 1.75 1.18 1.03 1.75 2.69 1.25 3.34.95.1-.74.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.46.11-3.02 0 0 .97-.31 3.17 1.17.92-.26 1.9-.39 2.88-.39s1.96.13 2.88.39c2.2-1.48 3.17-1.17 3.17-1.17.62 1.56.23 2.73.12 3.02.73.8 1.18 1.82 1.18 3.07 0 4.41-2.69 5.38-5.26 5.66.41.35.77 1.04.77 2.1v3.11c0 .31.21.68.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z" />
               </svg>
               <span>View Repo</span>
-              <small>GitHub</small>
             </a>
           </div>
 
@@ -114,8 +151,8 @@ const heroChromeHeight = '42px'
             </div>
           </div>
         </div>
-      </section>
-    </header>
+      </div>
+    </section>
 
     <main>
       <section class="about">
@@ -135,9 +172,10 @@ const heroChromeHeight = '42px'
           :key="feature.id"
           class="feature-section"
           :class="{ reverse: index % 2 === 1 }"
+          :style="{ '--feature-accent': feature.accent }"
         >
           <div class="feature-copy">
-            <p class="feature-kicker">Feature {{ index + 1 }}</p>
+            <p class="feature-kicker"><code class="kicker-num">0{{ index + 1 }}.</code></p>
             <h2>{{ feature.title }}</h2>
             <p>{{ feature.body }}</p>
           </div>
@@ -177,13 +215,16 @@ const heroChromeHeight = '42px'
         </article>
       </section>
 
-      <section class="more-tools">
+      <section class="more-tools" id="more-tools">
         <p class="eyebrow">More built-ins</p>
         <h2>More Built-Ins Included</h2>
-        <p>
-          Zcmd also ships with extras like aliases, calculator, clock, stopwatch, JSON formatting,
-          clipboard helpers, notes, IP tools, and more.
-        </p>
+        <div class="tools-grid">
+          <div v-for="tool in tools" :key="tool.cmd" class="tools-row">
+            <code class="tool-cmd">{{ tool.cmd }}</code>
+            <span class="tool-sep">—</span>
+            <span class="tool-desc">{{ tool.desc }}</span>
+          </div>
+        </div>
       </section>
     </main>
 

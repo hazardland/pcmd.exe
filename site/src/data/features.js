@@ -7,6 +7,7 @@ export const features = [
     video: '/videos/mp3.mp4',
     ratio: '417 / 203',
     topTrim: '9.25%',
+    accent: '#74ade8',
   },
   {
     id: 'history',
@@ -16,6 +17,7 @@ export const features = [
     video: '/videos/mp3.mp4',
     ratio: '417 / 203',
     topTrim: '9.25%',
+    accent: '#e5c07b',
   },
   {
     id: 'ls',
@@ -25,6 +27,7 @@ export const features = [
     video: '/videos/mp3.mp4',
     ratio: '417 / 203',
     topTrim: '9.25%',
+    accent: '#98c379',
   },
   {
     id: 'top',
@@ -34,6 +37,7 @@ export const features = [
     video: '/videos/mp3.mp4',
     ratio: '417 / 203',
     topTrim: '9.25%',
+    accent: '#b477cf',
   },
   {
     id: 'media',
@@ -43,6 +47,7 @@ export const features = [
     video: '/videos/mp3.mp4',
     ratio: '417 / 203',
     topTrim: '9.25%',
+    accent: '#56b6c2',
   },
   {
     id: 'mp3',
@@ -52,5 +57,6 @@ export const features = [
     video: '/videos/mp3.mp4',
     ratio: '417 / 203',
     topTrim: '9.25%',
+    accent: '#ffd885',
   },
 ];
