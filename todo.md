@@ -5,11 +5,8 @@
 # cat *.mp4
 - Sound
 
-# Youtube to mp3 downloader
-- yt link [folder to save default current folder], we will only implement this if we will not need some 3d parity library, the only exception is ffmpeg usage in all media kind of tasks because it can exist in system if not we say wingget install ffmpeg pls
-
 # Midnight Commander 
-- ctrl+o immidiatly toggles to terminal and to commander
+- ctrl+o immidiatly toggles to terminal and to commander it is seamless and you can jump navigate jump back and so on changing folder changes folder in terminal mode also
 - commander can navigate folders middnight commander style
 - it has two pannels and TAB toggles each pannel activation
 - can select folders and files with INSERT key selectet entries become different color
@@ -22,3 +19,9 @@
 
 # Pipes
 - make builtin commands work with pipes with outer tools
+
+# Resource monitor command
+- Cpu cores loads whatever standart windows api provides
+- GPU whatever standard windows api provides
+- temperature and battery if anything with standard windows api is accessable
+- any thing interesting to monitor system via standard windows api
