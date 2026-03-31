@@ -5,6 +5,8 @@
 // Include order matters — later modules may call functions defined in earlier ones.
 #include "src/common.h"   // includes, color macros, globals, out/err, to_utf8/to_wide
 #include "src/terminal.h" // term_width() term_height()
+#include "src/dialog.h"   // shared VT dialog state, rendering, key handling
+#include "src/commandbar.h" // shared VT command-bar rendering
 #include "src/signal.h"   // ctrl_c_fired, g_input, ctrl_handler, fwd-decls for persist
 #include "src/info.h"     // elevated, cur_time, cwd, folder, branch, dirty
 #include "src/prompt.h"   // prompt_t, make_prompt

@@ -116,6 +116,16 @@ static ENTRY_COLOR_KIND entry_color_kind(const std::wstring& name, bool is_dir, 
     return ENTRY_COLOR_FILE;
 }
 
+static bool ui_key_matches_text_prefix(const std::wstring& key, const std::wstring& text) {
+    return key.size() == 1 && !text.empty() && towlower(key[0]) == towlower(text[0]);
+}
+
+static std::wstring ui_text_tail(const std::wstring& key, const std::wstring& text) {
+    if (ui_key_matches_text_prefix(key, text))
+        return text.substr(1);
+    return text;
+}
+
 // Strip surrounding quotes and normalize forward slashes to backslashes.
 std::string normalize_path(const std::string& path) {
     std::string p = path;

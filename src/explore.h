@@ -13,6 +13,8 @@
 #include <map>
 #include <cstdint>
 #include <shellapi.h>
+#include "dialog.h"
+#include "commandbar.h"
 
 struct Entry {
     std::wstring name;
@@ -61,17 +63,10 @@ enum EXPLORER_DIALOG_KIND {
     EXPLORER_DIALOG_PROGRESS,
 };
 
-struct ExploreDialog {
-    EXPLORER_DIALOG_KIND kind         = EXPLORER_DIALOG_NONE;
-    bool         visible      = false;
-    std::wstring title;
-    std::wstring summary;
-    std::wstring detail;
-    std::wstring input_label;
-    std::wstring input_value;
-    int          input_cursor = 0;
-    int          progress_current = 0;
-    int          progress_total   = 0;
+enum EXPLORER_DIALOG_BUTTON_ID {
+    EXPLORER_DIALOG_BUTTON_OK = 1,
+    EXPLORER_DIALOG_BUTTON_CANCEL,
+    EXPLORER_DIALOG_BUTTON_ALL,
 };
 
 enum EXPLORER_COPY_TASK_KIND {
@@ -114,7 +109,8 @@ struct ExploreState {
     bool                filter_replace = false;
     std::wstring        jump_buffer;
     ULONGLONG           jump_tick     = 0;
-    ExploreDialog           dialog;
+    EXPLORER_DIALOG_KIND dialog_kind = EXPLORER_DIALOG_NONE;
+    DialogState          dialog;
     ExploreCopyState        copy;
     ExploreDeleteState      del;
     HANDLE              shell_buf     = NULL;
@@ -141,23 +137,7 @@ enum EXPLORE_STYLE : WORD {
     EXPLORE_STYLE_CURSOR_SELECTED,
     EXPLORE_STYLE_SELECTED,
     EXPLORE_STYLE_DOTDOT,
-    EXPLORE_STYLE_STATUSBAR,
-    EXPLORE_STYLE_COMMAND_KEY,
-    EXPLORE_STYLE_COMMAND_TEXT,
     EXPLORE_STYLE_BADGE,
-    EXPLORE_STYLE_DIALOG_BORDER,
-    EXPLORE_STYLE_DIALOG_FILL,
-    EXPLORE_STYLE_DIALOG_TITLE,
-    EXPLORE_STYLE_DIALOG_TEXT,
-    EXPLORE_STYLE_DIALOG_LABEL,
-    EXPLORE_STYLE_DIALOG_INPUT,
-    EXPLORE_STYLE_DIALOG_CURSOR,
-    EXPLORE_STYLE_DIALOG_CONFIRM_KEY,
-    EXPLORE_STYLE_DIALOG_CONFIRM_TEXT,
-    EXPLORE_STYLE_DIALOG_CAUTION_KEY,
-    EXPLORE_STYLE_DIALOG_CAUTION_TEXT,
-    EXPLORE_STYLE_DIALOG_CANCEL_KEY,
-    EXPLORE_STYLE_DIALOG_CANCEL_TEXT,
     EXPLORE_STYLE_COLOR_FILE,
     EXPLORE_STYLE_COLOR_DIR,
     EXPLORE_STYLE_COLOR_EXE,
@@ -181,23 +161,7 @@ enum EXPLORE_STYLE : WORD {
 #define EXPLORER_CURSOR_SELECTED EXPLORE_STYLE_CURSOR_SELECTED
 #define EXPLORER_SELECTED        EXPLORE_STYLE_SELECTED
 #define EXPLORER_DOTDOT          EXPLORE_STYLE_DOTDOT
-#define EXPLORER_STATUSBAR       EXPLORE_STYLE_STATUSBAR
-#define EXPLORER_COMMAND_KEY     EXPLORE_STYLE_COMMAND_KEY
-#define EXPLORER_COMMAND_TEXT    EXPLORE_STYLE_COMMAND_TEXT
 #define EXPLORER_BADGE           EXPLORE_STYLE_BADGE
-#define EXPLORER_DIALOG_BORDER   EXPLORER_BORDER_ACTIVE
-#define EXPLORER_DIALOG_FILL     EXPLORE_STYLE_DIALOG_FILL
-#define EXPLORER_DIALOG_TITLE    EXPLORE_STYLE_DIALOG_TITLE
-#define EXPLORER_DIALOG_TEXT     EXPLORE_STYLE_DIALOG_TEXT
-#define EXPLORER_DIALOG_LABEL    EXPLORE_STYLE_DIALOG_LABEL
-#define EXPLORER_DIALOG_INPUT    EXPLORE_STYLE_DIALOG_INPUT
-#define EXPLORER_DIALOG_CURSOR   EXPLORE_STYLE_DIALOG_CURSOR
-#define EXPLORER_DIALOG_CONFIRM_KEY   EXPLORE_STYLE_DIALOG_CONFIRM_KEY
-#define EXPLORER_DIALOG_CONFIRM_TEXT  EXPLORE_STYLE_DIALOG_CONFIRM_TEXT
-#define EXPLORER_DIALOG_CAUTION_KEY   EXPLORE_STYLE_DIALOG_CAUTION_KEY
-#define EXPLORER_DIALOG_CAUTION_TEXT  EXPLORE_STYLE_DIALOG_CAUTION_TEXT
-#define EXPLORER_DIALOG_CANCEL_KEY    EXPLORE_STYLE_DIALOG_CANCEL_KEY
-#define EXPLORER_DIALOG_CANCEL_TEXT   EXPLORE_STYLE_DIALOG_CANCEL_TEXT
 #define EXPLORER_COLOR_FILE      EXPLORE_STYLE_COLOR_FILE
 #define EXPLORER_COLOR_DIR       EXPLORE_STYLE_COLOR_DIR
 #define EXPLORER_COLOR_EXE       EXPLORE_STYLE_COLOR_EXE
@@ -212,37 +176,6 @@ enum EXPLORE_STYLE : WORD {
 
 static ExploreState g_explore;
 
-static const int EXPLORE_COMMAND_KEY_BG = 75;
-static const int EXPLORE_COMMAND_KEY_FG = 16;
-static const int EXPLORE_COMMAND_TEXT_BG = -1;
-static const int EXPLORE_COMMAND_TEXT_FG = 250;
-static const int EXPLORE_DIALOG_BORDER_BG = -1;
-static const int EXPLORE_DIALOG_BORDER_FG = 75;
-static const int EXPLORE_DIALOG_TITLE_BG = -1;
-static const int EXPLORE_DIALOG_TITLE_FG = 75;
-static const int EXPLORE_DIALOG_TEXT_BG = -1;
-static const int EXPLORE_DIALOG_TEXT_FG = 229;
-static const int EXPLORE_DIALOG_LABEL_BG = -1;
-static const int EXPLORE_DIALOG_LABEL_FG = 226;
-static const int EXPLORE_DIALOG_FILL_BG = -1;
-static const int EXPLORE_DIALOG_FILL_FG = 229;
-static const int EXPLORE_DIALOG_INPUT_BG = 236;
-static const int EXPLORE_DIALOG_INPUT_FG = 75;
-static const int EXPLORE_DIALOG_CURSOR_BG = 226;
-static const int EXPLORE_DIALOG_CURSOR_FG = 16;
-static const int EXPLORE_DIALOG_CONFIRM_KEY_BG = EXPLORE_COMMAND_KEY_BG;
-static const int EXPLORE_DIALOG_CONFIRM_KEY_FG = EXPLORE_COMMAND_KEY_FG;
-static const int EXPLORE_DIALOG_CONFIRM_TEXT_BG = EXPLORE_COMMAND_TEXT_BG;
-static const int EXPLORE_DIALOG_CONFIRM_TEXT_FG = EXPLORE_COMMAND_TEXT_FG;
-static const int EXPLORE_DIALOG_CAUTION_KEY_BG = 203;
-static const int EXPLORE_DIALOG_CAUTION_KEY_FG = 16;
-static const int EXPLORE_DIALOG_CAUTION_TEXT_BG = EXPLORE_DIALOG_CONFIRM_TEXT_BG;
-static const int EXPLORE_DIALOG_CAUTION_TEXT_FG = EXPLORE_DIALOG_CONFIRM_TEXT_FG;
-static const int EXPLORE_DIALOG_CANCEL_KEY_BG = 240;
-static const int EXPLORE_DIALOG_CANCEL_KEY_FG = 16;
-static const int EXPLORE_DIALOG_CANCEL_TEXT_BG = -1;
-static const int EXPLORE_DIALOG_CANCEL_TEXT_FG = 250;
-
 static const char* EXPLORE_VT_DEFAULT = "\x1b[49m\x1b[39m";
 static const char* EXPLORE_VT_BLUE = "\x1b[49m\x1b[38;5;75m";
 static const char* EXPLORE_VT_GRAY = "\x1b[49m\x1b[38;5;240m";
@@ -255,8 +188,6 @@ static const char* EXPLORE_VT_MAGENTA = "\x1b[49m\x1b[1;35m";
 static const char* EXPLORE_VT_MEDIA = "\x1b[49m\x1b[38;5;51m";
 static const char* EXPLORE_VT_CURSOR = "\x1b[48;5;226m\x1b[38;5;16m";
 static const char* EXPLORE_VT_CURSOR_SELECTED = "\x1b[48;5;226m\x1b[38;5;94m";
-static const char* EXPLORE_VT_COMMAND_TEXT = "\x1b[48;5;240m\x1b[38;5;16m";
-static const char* EXPLORE_VT_DIALOG_INPUT = "\x1b[48;5;236m\x1b[38;5;75m";
 
 static std::string explore_vt_fg_bg(int fg, int bg) {
     std::string vt;
@@ -298,6 +229,7 @@ static bool explore_copy_build_tasks(const std::vector<std::wstring>& sources, c
 static bool explore_move_build_tasks(const std::vector<std::wstring>& sources, const std::wstring& raw_dest,
     std::vector<ExploreCopyTask>& tasks, std::map<std::wstring, size_t>& pending, std::wstring& error);
 static void explore_copy_run();
+static void explore_copy_cancel();
 static void explore_delete_run();
 static void explore_copy_refresh_panels();
 
@@ -791,177 +723,6 @@ static void explore_text(std::vector<wchar_t>& chars, std::vector<WORD>& attrs,
         explore_put(chars, attrs, width, height, x + i, y, text[i], attr);
 }
 
-static std::wstring explore_status_pad(const std::wstring& label) {
-    const int width = 4;
-    std::wstring padded = label + L" ";
-    if ((int)padded.size() >= width) return padded;
-    return padded + std::wstring(width - (int)padded.size(), L' ');
-}
-
-static int explore_status_item(std::vector<wchar_t>& chars, std::vector<WORD>& attrs,
-    int width, int height, int x, int y, const std::wstring& key, const std::wstring& label,
-    WORD key_attr, WORD text_attr, WORD gap_attr) {
-    if (x >= width) return x;
-
-    explore_text(chars, attrs, width, height, x, y, key, key_attr);
-    x += (int)key.size();
-    std::wstring padded = explore_status_pad(label);
-    explore_text(chars, attrs, width, height, x, y, padded, text_attr);
-    x += (int)padded.size();
-    if (x < width) {
-        explore_put(chars, attrs, width, height, x, y, L' ', gap_attr);
-        x++;
-    }
-    return x;
-}
-
-static int explore_dialog_button(std::vector<wchar_t>& chars, std::vector<WORD>& attrs,
-    int width, int height, int x, int y, const std::wstring& key, const std::wstring& label,
-    WORD key_attr, WORD text_attr, WORD fill_attr) {
-    if (x >= width) return x;
-
-    const WORD chrome_attr = text_attr;
-    explore_text(chars, attrs, width, height, x, y, L"[ ", chrome_attr);
-    x += 2;
-
-    explore_text(chars, attrs, width, height, x, y, key, key_attr);
-    x += (int)key.size();
-
-    explore_put(chars, attrs, width, height, x, y, L' ', chrome_attr);
-    x++;
-
-    explore_text(chars, attrs, width, height, x, y, label, text_attr);
-    x += (int)label.size();
-
-    explore_text(chars, attrs, width, height, x, y, L" ]", chrome_attr);
-    x += 2;
-
-    if (x < width) {
-        explore_put(chars, attrs, width, height, x, y, L' ', fill_attr);
-        x++;
-    }
-    return x;
-}
-
-static void explore_box(std::vector<wchar_t>& chars, std::vector<WORD>& attrs,
-    int width, int height, int left, int top, int box_w, int box_h, WORD border_attr, WORD fill_attr) {
-    if (box_w <= 1 || box_h <= 1) return;
-    for (int y = top; y < top + box_h; y++)
-        explore_fill(chars, attrs, width, height, left, y, box_w, L' ', fill_attr);
-
-    explore_put(chars, attrs, width, height, left, top, L'\x250C', border_attr);
-    explore_put(chars, attrs, width, height, left + box_w - 1, top, L'\x2510', border_attr);
-    explore_put(chars, attrs, width, height, left, top + box_h - 1, L'\x2514', border_attr);
-    explore_put(chars, attrs, width, height, left + box_w - 1, top + box_h - 1, L'\x2518', border_attr);
-    if (box_w > 2) {
-        explore_fill(chars, attrs, width, height, left + 1, top, box_w - 2, L'\x2500', border_attr);
-        explore_fill(chars, attrs, width, height, left + 1, top + box_h - 1, box_w - 2, L'\x2500', border_attr);
-    }
-    for (int y = top + 1; y < top + box_h - 1; y++) {
-        explore_put(chars, attrs, width, height, left, y, L'\x2502', border_attr);
-        explore_put(chars, attrs, width, height, left + box_w - 1, y, L'\x2502', border_attr);
-    }
-}
-
-static std::wstring explore_dialog_tail(const std::wstring& value, int width, int cursor, int& start_out) {
-    start_out = 0;
-    if (width <= 0) return L"";
-    if ((int)value.size() <= width) return value;
-    start_out = std::max(0, cursor - width + 1);
-    if (start_out + width > (int)value.size())
-        start_out = (int)value.size() - width;
-    return value.substr(start_out, width);
-}
-
-static void explore_draw_dialog(std::vector<wchar_t>& chars, std::vector<WORD>& attrs, int width, int height) {
-    if (!g_explore.dialog.visible) return;
-
-    int dialog_w = std::min(width, std::max(36, std::min(width - 4, 64)));
-    bool input_dialog = g_explore.dialog.kind == EXPLORER_DIALOG_COPY ||
-        g_explore.dialog.kind == EXPLORER_DIALOG_MOVE ||
-        g_explore.dialog.kind == EXPLORER_DIALOG_MKDIR;
-    int dialog_h = std::min(height, input_dialog ? 8 : 7);
-    if (dialog_w <= 2 || dialog_h <= 2) return;
-
-    int left = std::max(0, (width - dialog_w) / 2);
-    int top  = std::max(0, (height - dialog_h) / 2);
-    explore_box(chars, attrs, width, height, left, top, dialog_w, dialog_h, EXPLORER_DIALOG_BORDER, EXPLORER_DIALOG_FILL);
-
-    explore_text(chars, attrs, width, height, left + 2, top, explore_fit(g_explore.dialog.title, dialog_w - 4), EXPLORER_DIALOG_TITLE);
-    explore_text(chars, attrs, width, height, left + 2, top + 2,
-        explore_fit(g_explore.dialog.summary, dialog_w - 4), EXPLORER_DIALOG_TEXT);
-    if (!g_explore.dialog.detail.empty()) {
-        explore_text(chars, attrs, width, height, left + 2, top + 3,
-            explore_fit(g_explore.dialog.detail, dialog_w - 4), EXPLORER_DIALOG_TEXT);
-    }
-
-    int footer_x = left + 2;
-    int footer_y = top + dialog_h - 2;
-    if (input_dialog) {
-        explore_text(chars, attrs, width, height, left + 2, top + 3,
-            explore_fit(g_explore.dialog.input_label, dialog_w - 4), EXPLORER_DIALOG_LABEL);
-
-        int input_x = left + 2;
-        int input_y = top + 4;
-        int input_w = std::max(1, dialog_w - 4);
-        explore_fill(chars, attrs, width, height, input_x, input_y, input_w, L' ', EXPLORER_DIALOG_INPUT);
-
-        int start = 0;
-        std::wstring visible = explore_dialog_tail(g_explore.dialog.input_value, input_w, g_explore.dialog.input_cursor, start);
-        explore_text(chars, attrs, width, height, input_x, input_y, visible, EXPLORER_DIALOG_INPUT);
-
-        int cursor_x = input_x + std::max(0, g_explore.dialog.input_cursor - start);
-        if (cursor_x >= input_x + input_w) cursor_x = input_x + input_w - 1;
-        wchar_t cursor_ch = L' ';
-        if (g_explore.dialog.input_cursor >= start &&
-            g_explore.dialog.input_cursor < start + (int)visible.size()) {
-            cursor_ch = visible[g_explore.dialog.input_cursor - start];
-        }
-        explore_put(chars, attrs, width, height, cursor_x, input_y, cursor_ch, EXPLORER_DIALOG_CURSOR);
-
-        footer_x = explore_dialog_button(chars, attrs, width, height, footer_x, footer_y, L"ENTER", L"Ok",
-            EXPLORER_DIALOG_CONFIRM_KEY, EXPLORER_DIALOG_CONFIRM_TEXT, EXPLORER_DIALOG_FILL);
-        explore_dialog_button(chars, attrs, width, height, footer_x, footer_y, L"ESC", L"Cancel",
-            EXPLORER_DIALOG_CANCEL_KEY, EXPLORER_DIALOG_CANCEL_TEXT, EXPLORER_DIALOG_FILL);
-    } else if (g_explore.dialog.kind == EXPLORER_DIALOG_OVERWRITE) {
-        footer_x = explore_dialog_button(chars, attrs, width, height, footer_x, footer_y, L"ENTER", L"Yes",
-            EXPLORER_DIALOG_CAUTION_KEY, EXPLORER_DIALOG_CAUTION_TEXT, EXPLORER_DIALOG_FILL);
-        footer_x = explore_dialog_button(chars, attrs, width, height, footer_x, footer_y, L"CTRL+ENTER", L"All",
-            EXPLORER_DIALOG_CAUTION_KEY, EXPLORER_DIALOG_CAUTION_TEXT, EXPLORER_DIALOG_FILL);
-        explore_dialog_button(chars, attrs, width, height, footer_x, footer_y, L"ESC", L"Cancel",
-            EXPLORER_DIALOG_CANCEL_KEY, EXPLORER_DIALOG_CANCEL_TEXT, EXPLORER_DIALOG_FILL);
-    } else if (g_explore.dialog.kind == EXPLORER_DIALOG_RECYCLE || g_explore.dialog.kind == EXPLORER_DIALOG_DELETE) {
-        footer_x = explore_dialog_button(chars, attrs, width, height, footer_x, footer_y, L"ENTER",
-            g_explore.dialog.kind == EXPLORER_DIALOG_RECYCLE ? L"Recycle" : L"Delete",
-            EXPLORER_DIALOG_CAUTION_KEY,
-            EXPLORER_DIALOG_CAUTION_TEXT,
-            EXPLORER_DIALOG_FILL);
-        explore_dialog_button(chars, attrs, width, height, footer_x, footer_y, L"ESC", L"Cancel",
-            EXPLORER_DIALOG_CANCEL_KEY, EXPLORER_DIALOG_CANCEL_TEXT, EXPLORER_DIALOG_FILL);
-    } else if (g_explore.dialog.kind == EXPLORER_DIALOG_PROGRESS) {
-        int bar_x = left + 2;
-        int bar_y = top + 4;
-        int bar_w = std::max(8, dialog_w - 4);
-        int total = std::max(1, g_explore.dialog.progress_total);
-        int current = std::max(0, std::min(g_explore.dialog.progress_current, total));
-        int filled = (bar_w * current) / total;
-        explore_fill(chars, attrs, width, height, bar_x, bar_y, bar_w, L' ', EXPLORER_DIALOG_INPUT);
-        if (filled > 0)
-            explore_fill(chars, attrs, width, height, bar_x, bar_y, filled, L' ', EXPLORER_DIALOG_CURSOR);
-
-        std::wstring percent = std::to_wstring((current * 100) / total) + L"%";
-        int percent_x = bar_x + std::max(0, (bar_w - (int)percent.size()) / 2);
-        explore_text(chars, attrs, width, height, percent_x, bar_y, percent, EXPLORER_DIALOG_TEXT);
-        explore_text(chars, attrs, width, height, left + 2, footer_y,
-            explore_fit(L"Working...", dialog_w - 4), EXPLORER_DIALOG_TEXT);
-    } else {
-        footer_x = explore_dialog_button(chars, attrs, width, height, footer_x, footer_y, L"ENTER", L"Close",
-            EXPLORER_DIALOG_CONFIRM_KEY, EXPLORER_DIALOG_CONFIRM_TEXT, EXPLORER_DIALOG_FILL);
-        explore_dialog_button(chars, attrs, width, height, footer_x, footer_y, L"ESC", L"Close",
-            EXPLORER_DIALOG_CANCEL_KEY, EXPLORER_DIALOG_CANCEL_TEXT, EXPLORER_DIALOG_FILL);
-    }
-}
-
 static void explore_draw_panel(std::vector<wchar_t>& chars, std::vector<WORD>& attrs,
     int width, int height, const Panel& panel, int left, int right) {
     int inner_x = left + 1;
@@ -978,11 +739,11 @@ static void explore_draw_panel(std::vector<wchar_t>& chars, std::vector<WORD>& a
 
     if (explore_any_filter_row()) {
         int filter_y = explore_separator_y() - 1;
-        WORD filter_attr = panel.active ? EXPLORER_PATH : EXPLORER_STATUSBAR;
+        WORD filter_attr = panel.active ? EXPLORER_PATH : EXPLORER_BORDER_INACTIVE;
         bool filter_focus = panel.active && explore_filter_focused();
         if (filter_focus) {
             int start = 0;
-            std::wstring visible = explore_dialog_tail(panel.filter, inner_w, panel.filter_cursor, start);
+            std::wstring visible = dialog_input_tail(panel.filter, inner_w, panel.filter_cursor, start);
             explore_text(chars, attrs, width, height, inner_x, filter_y, visible, filter_attr);
 
             int cursor_x = inner_x + std::max(0, panel.filter_cursor - start);
@@ -992,7 +753,7 @@ static void explore_draw_panel(std::vector<wchar_t>& chars, std::vector<WORD>& a
                 panel.filter_cursor < start + (int)visible.size()) {
                 cursor_ch = visible[panel.filter_cursor - start];
             }
-            explore_put(chars, attrs, width, height, cursor_x, filter_y, cursor_ch, EXPLORER_DIALOG_CURSOR);
+            explore_put(chars, attrs, width, height, cursor_x, filter_y, cursor_ch, DIALOG_STYLE_INPUT_CURSOR);
         } else {
             std::wstring filter = panel.filter.empty() ? L"*" : panel.filter;
             explore_text(chars, attrs, width, height, inner_x, filter_y, explore_fit(filter, inner_w), filter_attr);
@@ -1058,50 +819,22 @@ static void explore_draw_panel(std::vector<wchar_t>& chars, std::vector<WORD>& a
 }
 
 static std::string explore_style_vt(WORD attr) {
+    if (commandbar_is_style(attr))
+        return commandbar_style_vt(attr, command_palette_default());
     if (attr == EXPLORER_BORDER_ACTIVE || attr == EXPLORER_PATH || attr == EXPLORER_COLOR_DIR || attr == EXPLORER_PROG_LOW)
         return EXPLORE_VT_BLUE;
     if (attr == EXPLORER_BORDER_INACTIVE || attr == EXPLORER_DOTDOT || attr == EXPLORER_COLOR_HIDDEN)
         return EXPLORE_VT_GRAY;
     if (attr == EXPLORER_FILTER)
         return EXPLORE_VT_YELLOW;
-    if (attr == EXPLORER_FILTER_BG || attr == EXPLORER_CURSOR_BG || attr == EXPLORER_DIALOG_CURSOR)
+    if (attr == EXPLORER_FILTER_BG || attr == EXPLORER_CURSOR_BG)
         return EXPLORE_VT_CURSOR;
     if (attr == EXPLORER_CURSOR_SELECTED)
         return EXPLORE_VT_CURSOR_SELECTED;
     if (attr == EXPLORER_SELECTED || attr == EXPLORER_BADGE || attr == EXPLORER_PROG_MID)
         return EXPLORE_VT_BRIGHT_YELLOW;
-    if (attr == EXPLORER_STATUSBAR)
-        return EXPLORE_VT_DEFAULT;
-    if (attr == EXPLORER_COMMAND_KEY)
-        return explore_vt_fg_bg(EXPLORE_COMMAND_KEY_FG, EXPLORE_COMMAND_KEY_BG);
-    if (attr == EXPLORER_COMMAND_TEXT)
-        return explore_vt_fg_bg(EXPLORE_COMMAND_TEXT_FG, EXPLORE_COMMAND_TEXT_BG);
-    if (attr == EXPLORER_DIALOG_FILL)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_FILL_FG, EXPLORE_DIALOG_FILL_BG);
-    if (attr == EXPLORER_DIALOG_INPUT)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_INPUT_FG, EXPLORE_DIALOG_INPUT_BG);
-    if (attr == EXPLORER_DIALOG_BORDER)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_BORDER_FG, EXPLORE_DIALOG_BORDER_BG);
-    if (attr == EXPLORER_DIALOG_TITLE)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_TITLE_FG, EXPLORE_DIALOG_TITLE_BG);
-    if (attr == EXPLORER_DIALOG_TEXT)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_TEXT_FG, EXPLORE_DIALOG_TEXT_BG);
-    if (attr == EXPLORER_DIALOG_LABEL)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_LABEL_FG, EXPLORE_DIALOG_LABEL_BG);
-    if (attr == EXPLORER_DIALOG_CURSOR)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_CURSOR_FG, EXPLORE_DIALOG_CURSOR_BG);
-    if (attr == EXPLORER_DIALOG_CONFIRM_KEY)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_CONFIRM_KEY_FG, EXPLORE_DIALOG_CONFIRM_KEY_BG);
-    if (attr == EXPLORER_DIALOG_CONFIRM_TEXT)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_CONFIRM_TEXT_FG, EXPLORE_DIALOG_CONFIRM_TEXT_BG);
-    if (attr == EXPLORER_DIALOG_CAUTION_KEY)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_CAUTION_KEY_FG, EXPLORE_DIALOG_CAUTION_KEY_BG);
-    if (attr == EXPLORER_DIALOG_CAUTION_TEXT)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_CAUTION_TEXT_FG, EXPLORE_DIALOG_CAUTION_TEXT_BG);
-    if (attr == EXPLORER_DIALOG_CANCEL_KEY)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_CANCEL_KEY_FG, EXPLORE_DIALOG_CANCEL_KEY_BG);
-    if (attr == EXPLORER_DIALOG_CANCEL_TEXT)
-        return explore_vt_fg_bg(EXPLORE_DIALOG_CANCEL_TEXT_FG, EXPLORE_DIALOG_CANCEL_TEXT_BG);
+    if (dialog_is_style(attr))
+        return dialog_style_vt(attr, g_explore.dialog.palette);
     if (attr == EXPLORER_COLOR_FILE)
         return EXPLORE_VT_FILE;
     if (attr == EXPLORER_COLOR_EXE)
@@ -1235,30 +968,20 @@ static void explore_draw() {
     explore_draw_panel(chars, attrs, width, height, g_explore.left, 0, split);
     explore_draw_panel(chars, attrs, width, height, g_explore.right, split, width - 1);
 
-    explore_fill(chars, attrs, width, height, 0, height - 1, width, L' ', EXPLORER_STATUSBAR);
-    int sx = 1;
-    sx = explore_status_item(chars, attrs, width, height, sx, height - 1, L"F1", L"Mirror",
-        EXPLORER_COMMAND_KEY, EXPLORER_COMMAND_TEXT, EXPLORER_STATUSBAR);
-    sx = explore_status_item(chars, attrs, width, height, sx, height - 1, L"F2", L"Sort",
-        EXPLORER_COMMAND_KEY, EXPLORER_COMMAND_TEXT, EXPLORER_STATUSBAR);
-    sx = explore_status_item(chars, attrs, width, height, sx, height - 1, L"F3", L"View",
-        EXPLORER_COMMAND_KEY, EXPLORER_COMMAND_TEXT, EXPLORER_STATUSBAR);
-    sx = explore_status_item(chars, attrs, width, height, sx, height - 1, L"F4", L"Edit",
-        EXPLORER_COMMAND_KEY, EXPLORER_COMMAND_TEXT, EXPLORER_STATUSBAR);
-    sx = explore_status_item(chars, attrs, width, height, sx, height - 1, L"F5", L"Copy",
-        EXPLORER_COMMAND_KEY, EXPLORER_COMMAND_TEXT, EXPLORER_STATUSBAR);
-    sx = explore_status_item(chars, attrs, width, height, sx, height - 1, L"F6", L"Move",
-        EXPLORER_COMMAND_KEY, EXPLORER_COMMAND_TEXT, EXPLORER_STATUSBAR);
-    sx = explore_status_item(chars, attrs, width, height, sx, height - 1, L"F7", L"MkDir",
-        EXPLORER_COMMAND_KEY, EXPLORER_COMMAND_TEXT, EXPLORER_STATUSBAR);
-    sx = explore_status_item(chars, attrs, width, height, sx, height - 1, L"F8", L"Del",
-        EXPLORER_COMMAND_KEY, EXPLORER_COMMAND_TEXT, EXPLORER_STATUSBAR);
-    sx = explore_status_item(chars, attrs, width, height, sx, height - 1, L"S+F8", L"Del",
-        EXPLORER_COMMAND_KEY, EXPLORER_COMMAND_TEXT, EXPLORER_STATUSBAR);
-    explore_status_item(chars, attrs, width, height, sx, height - 1, L"CTRL+O", L"Hide",
-        EXPLORER_COMMAND_KEY, EXPLORER_COMMAND_TEXT, EXPLORER_STATUSBAR);
+    commandbar_draw(chars, attrs, width, height, height - 1, {
+        command_item(L"F1", L"Mirror"),
+        command_item(L"F2", L"Sort"),
+        command_item(L"F3", L"View"),
+        command_item(L"F4", L"Edit"),
+        command_item(L"F5", L"Copy"),
+        command_item(L"F6", L"Move"),
+        command_item(L"F7", L"MkDir"),
+        command_item(L"F8", L"Del"),
+        command_item(L"S+F8", L"Del"),
+        command_item(L"CTRL+O", L"Hide"),
+    });
 
-    explore_draw_dialog(chars, attrs, width, height);
+    dialog_draw(chars, attrs, width, height, g_explore.dialog);
     explore_present(chars, attrs, width, height);
 }
 
@@ -1285,39 +1008,54 @@ static std::wstring explore_copy_summary() {
     return L"From: " + entry.name + (entry.is_dir ? L"/" : L"");
 }
 
-static void explore_dialog_open(const std::wstring& title, const std::wstring& summary,
-    const std::wstring& detail, const std::wstring& input_label,
-    const std::wstring& input_value, EXPLORER_DIALOG_KIND kind) {
+static void explore_dialog_begin(EXPLORER_DIALOG_KIND kind) {
     explore_jump_clear();
     g_explore.focus = EXPLORER_FOCUS_DIALOG;
     g_explore.filter_replace = false;
-    g_explore.dialog.kind = kind;
-    g_explore.dialog.visible = true;
-    g_explore.dialog.title = title;
-    g_explore.dialog.summary = summary;
-    g_explore.dialog.detail = detail;
-    g_explore.dialog.input_label = input_label;
-    g_explore.dialog.input_value = input_value;
-    g_explore.dialog.input_cursor = (int)g_explore.dialog.input_value.size();
+    g_explore.dialog_kind = kind;
+}
+
+// Explorer decides when to open a dialog and what each button means.
+// Shared dialog code owns drawing, key matching, input editing, and button role styling.
+static void explore_dialog_open_message(EXPLORER_DIALOG_KIND kind, const std::wstring& title, const std::wstring& summary,
+    const std::wstring& detail, const std::vector<DialogButton>& buttons, const DialogPalette& palette = dialog_palette_default()) {
+    explore_dialog_begin(kind);
+    dialog_open_message(g_explore.dialog, title, summary, detail, buttons, palette);
+}
+
+static void explore_dialog_open_input(EXPLORER_DIALOG_KIND kind, const std::wstring& title, const std::wstring& summary,
+    const std::wstring& detail, const std::wstring& input_label, const std::wstring& input_value,
+    const std::vector<DialogButton>& buttons, const DialogPalette& palette = dialog_palette_default()) {
+    explore_dialog_begin(kind);
+    dialog_open_input(g_explore.dialog, title, summary, detail, input_label, input_value, buttons, palette);
 }
 
 static void explore_copy_dialog_open() {
     std::wstring target = explore_display_path(explore_inactive_panel().cwd);
-    explore_dialog_open(L"Copy", explore_copy_summary(), L"", L"To:", target, EXPLORER_DIALOG_COPY);
+    explore_dialog_open_input(EXPLORER_DIALOG_COPY, L"Copy", explore_copy_summary(), L"", L"To:", target, {
+        dialog_button(EXPLORER_DIALOG_BUTTON_OK, L"ENTER", L"Ok", DIALOG_BUTTON_CONFIRM, VK_RETURN),
+        dialog_button(EXPLORER_DIALOG_BUTTON_CANCEL, L"ESC", L"Cancel", DIALOG_BUTTON_CANCEL, VK_ESCAPE),
+    });
 }
 
 static void explore_mkdir_dialog_open() {
-    explore_dialog_open(L"MkDir",
+    explore_dialog_open_input(EXPLORER_DIALOG_MKDIR, L"MkDir",
         L"In: " + explore_display_path(explore_active_panel().cwd),
         L"",
         L"Name:",
         L"",
-        EXPLORER_DIALOG_MKDIR);
+        {
+            dialog_button(EXPLORER_DIALOG_BUTTON_OK, L"ENTER", L"Ok", DIALOG_BUTTON_CONFIRM, VK_RETURN),
+            dialog_button(EXPLORER_DIALOG_BUTTON_CANCEL, L"ESC", L"Cancel", DIALOG_BUTTON_CANCEL, VK_ESCAPE),
+        });
 }
 
 static void explore_move_dialog_open() {
     std::wstring target = explore_display_path(explore_inactive_panel().cwd);
-    explore_dialog_open(L"Move", explore_copy_summary(), L"", L"To:", target, EXPLORER_DIALOG_MOVE);
+    explore_dialog_open_input(EXPLORER_DIALOG_MOVE, L"Move", explore_copy_summary(), L"", L"To:", target, {
+        dialog_button(EXPLORER_DIALOG_BUTTON_OK, L"ENTER", L"Ok", DIALOG_BUTTON_CONFIRM, VK_RETURN),
+        dialog_button(EXPLORER_DIALOG_BUTTON_CANCEL, L"ESC", L"Cancel", DIALOG_BUTTON_CANCEL, VK_ESCAPE),
+    });
 }
 
 static void explore_open_other_same_dir() {
@@ -1389,44 +1127,54 @@ static std::wstring explore_delete_detail(const std::vector<std::wstring>& sourc
 
 static void explore_delete_dialog_open(bool recycle) {
     std::vector<std::wstring> sources = explore_copy_sources();
-    explore_dialog_open(recycle ? L"Recycle" : L"Delete",
+    explore_dialog_open_message(recycle ? EXPLORER_DIALOG_RECYCLE : EXPLORER_DIALOG_DELETE,
+        recycle ? L"Recycle" : L"Delete",
         explore_delete_summary(sources, recycle),
         explore_delete_detail(sources, recycle),
-        L"", L"", recycle ? EXPLORER_DIALOG_RECYCLE : EXPLORER_DIALOG_DELETE);
+        {
+            dialog_button(EXPLORER_DIALOG_BUTTON_OK, L"ENTER", recycle ? L"Recycle" : L"Delete", DIALOG_BUTTON_CAUTION, VK_RETURN),
+            dialog_button(EXPLORER_DIALOG_BUTTON_CANCEL, L"ESC", L"Cancel", DIALOG_BUTTON_CANCEL, VK_ESCAPE),
+        });
 }
 
 static void explore_info_dialog_open(const std::wstring& title, const std::wstring& summary, const std::wstring& detail) {
-    explore_dialog_open(title, summary, detail, L"", L"", EXPLORER_DIALOG_INFO);
+    explore_dialog_open_message(EXPLORER_DIALOG_INFO, title, summary, detail, {
+        dialog_button(EXPLORER_DIALOG_BUTTON_OK, L"ENTER", L"Close", DIALOG_BUTTON_CONFIRM, VK_RETURN),
+        dialog_button(EXPLORER_DIALOG_BUTTON_CANCEL, L"ESC", L"Close", DIALOG_BUTTON_CANCEL, VK_ESCAPE),
+    });
 }
 
 static void explore_overwrite_dialog_open(const std::wstring& dst) {
     std::wstring title = g_explore.copy.move_mode ? L"Move" : L"Copy";
-    explore_dialog_open(title + L" Overwrite", L"Target file already exists", explore_display_path(dst), L"", L"", EXPLORER_DIALOG_OVERWRITE);
+    explore_dialog_open_message(EXPLORER_DIALOG_OVERWRITE, title + L" Overwrite",
+        L"Target file already exists", explore_display_path(dst),
+        {
+            dialog_button(EXPLORER_DIALOG_BUTTON_OK, L"ENTER", L"Yes", DIALOG_BUTTON_CAUTION, VK_RETURN),
+            dialog_button(EXPLORER_DIALOG_BUTTON_ALL, L"CTRL+ENTER", L"All", DIALOG_BUTTON_CAUTION, VK_RETURN, true),
+            dialog_button(EXPLORER_DIALOG_BUTTON_CANCEL, L"ESC", L"Cancel", DIALOG_BUTTON_CANCEL, VK_ESCAPE),
+        },
+        dialog_palette_warning());
 }
 
 static void explore_progress_dialog_open(const std::wstring& title, const std::wstring& summary, const std::wstring& detail, int current, int total) {
-    g_explore.focus = EXPLORER_FOCUS_DIALOG;
-    g_explore.filter_replace = false;
-    g_explore.dialog.kind = EXPLORER_DIALOG_PROGRESS;
-    g_explore.dialog.visible = true;
-    g_explore.dialog.title = title;
-    g_explore.dialog.summary = summary;
-    g_explore.dialog.detail = detail;
-    g_explore.dialog.input_label.clear();
-    g_explore.dialog.input_value.clear();
-    g_explore.dialog.input_cursor = 0;
-    g_explore.dialog.progress_current = current;
-    g_explore.dialog.progress_total = total;
+    explore_dialog_begin(EXPLORER_DIALOG_PROGRESS);
+    dialog_open_progress(g_explore.dialog, title, summary, detail, current, total);
 }
 
 static void explore_dialog_close() {
-    g_explore.dialog.visible = false;
-    g_explore.dialog = ExploreDialog();
+    dialog_close(g_explore.dialog);
+    g_explore.dialog_kind = EXPLORER_DIALOG_NONE;
     g_explore.focus = EXPLORER_FOCUS_PANEL;
 }
 
-static void explore_dialog_confirm() {
-    if (g_explore.dialog.kind == EXPLORER_DIALOG_MKDIR) {
+static void explore_dialog_cancel() {
+    if (g_explore.dialog_kind == EXPLORER_DIALOG_OVERWRITE)
+        explore_copy_cancel();
+    explore_dialog_close();
+}
+
+static void explore_dialog_confirm(int button_id) {
+    if (g_explore.dialog_kind == EXPLORER_DIALOG_MKDIR) {
         Panel& panel = explore_active_panel();
         std::wstring raw = explore_trim(g_explore.dialog.input_value);
         if (raw.empty()) {
@@ -1456,7 +1204,7 @@ static void explore_dialog_confirm() {
         return;
     }
 
-    if (g_explore.dialog.kind == EXPLORER_DIALOG_COPY) {
+    if (g_explore.dialog_kind == EXPLORER_DIALOG_COPY) {
         std::vector<std::wstring> sources = explore_copy_sources();
         std::vector<ExploreCopyTask> tasks;
         std::map<std::wstring, size_t> pending;
@@ -1477,7 +1225,7 @@ static void explore_dialog_confirm() {
         return;
     }
 
-    if (g_explore.dialog.kind == EXPLORER_DIALOG_MOVE) {
+    if (g_explore.dialog_kind == EXPLORER_DIALOG_MOVE) {
         std::vector<std::wstring> sources = explore_copy_sources();
         std::vector<ExploreCopyTask> tasks;
         std::map<std::wstring, size_t> pending;
@@ -1499,21 +1247,24 @@ static void explore_dialog_confirm() {
         return;
     }
 
-    if (g_explore.dialog.kind == EXPLORER_DIALOG_OVERWRITE) {
-        g_explore.copy.overwrite_once = true;
+    if (g_explore.dialog_kind == EXPLORER_DIALOG_OVERWRITE) {
+        if (button_id == EXPLORER_DIALOG_BUTTON_ALL)
+            g_explore.copy.overwrite_all = true;
+        else
+            g_explore.copy.overwrite_once = true;
         explore_dialog_close();
         explore_copy_run();
         return;
     }
 
-    if (g_explore.dialog.kind == EXPLORER_DIALOG_RECYCLE || g_explore.dialog.kind == EXPLORER_DIALOG_DELETE) {
+    if (g_explore.dialog_kind == EXPLORER_DIALOG_RECYCLE || g_explore.dialog_kind == EXPLORER_DIALOG_DELETE) {
         std::vector<std::wstring> sources = explore_copy_sources();
         if (sources.empty()) {
-            explore_info_dialog_open(g_explore.dialog.kind == EXPLORER_DIALOG_RECYCLE ? L"Recycle" : L"Delete", L"Nothing selected", L"");
+            explore_info_dialog_open(g_explore.dialog_kind == EXPLORER_DIALOG_RECYCLE ? L"Recycle" : L"Delete", L"Nothing selected", L"");
             return;
         }
 
-        bool recycle = g_explore.dialog.kind == EXPLORER_DIALOG_RECYCLE;
+        bool recycle = g_explore.dialog_kind == EXPLORER_DIALOG_RECYCLE;
         explore_dialog_close();
         g_explore.del = ExploreDeleteState();
         g_explore.del.active = true;
@@ -1525,38 +1276,6 @@ static void explore_dialog_confirm() {
     }
 
     explore_dialog_close();
-}
-
-static void explore_dialog_confirm_all() {
-    if (g_explore.dialog.kind != EXPLORER_DIALOG_OVERWRITE) return;
-    g_explore.copy.overwrite_all = true;
-    explore_dialog_close();
-    explore_copy_run();
-}
-
-static void explore_dialog_move_cursor(int delta) {
-    int next = g_explore.dialog.input_cursor + delta;
-    g_explore.dialog.input_cursor = std::max(0, std::min(next, (int)g_explore.dialog.input_value.size()));
-}
-
-static void explore_dialog_move_home_end(bool home) {
-    g_explore.dialog.input_cursor = home ? 0 : (int)g_explore.dialog.input_value.size();
-}
-
-static void explore_dialog_backspace() {
-    if (g_explore.dialog.input_cursor <= 0) return;
-    g_explore.dialog.input_value.erase(g_explore.dialog.input_cursor - 1, 1);
-    g_explore.dialog.input_cursor--;
-}
-
-static void explore_dialog_delete_char() {
-    if (g_explore.dialog.input_cursor >= (int)g_explore.dialog.input_value.size()) return;
-    g_explore.dialog.input_value.erase(g_explore.dialog.input_cursor, 1);
-}
-
-static void explore_dialog_insert(wchar_t ch) {
-    g_explore.dialog.input_value.insert(g_explore.dialog.input_cursor, 1, ch);
-    g_explore.dialog.input_cursor++;
 }
 
 static std::vector<std::wstring> explore_copy_sources() {
@@ -1810,14 +1529,14 @@ static void explore_copy_finish() {
     Panel& source = explore_copy_source_panel();
     for (const std::wstring& src : g_explore.copy.sources)
         source.selected.erase(src);
-    if (g_explore.dialog.kind == EXPLORER_DIALOG_PROGRESS)
+    if (g_explore.dialog_kind == EXPLORER_DIALOG_PROGRESS)
         explore_dialog_close();
     g_explore.copy = ExploreCopyState();
     explore_copy_refresh_panels();
 }
 
 static void explore_copy_cancel() {
-    if (g_explore.dialog.kind == EXPLORER_DIALOG_PROGRESS)
+    if (g_explore.dialog_kind == EXPLORER_DIALOG_PROGRESS)
         explore_dialog_close();
     g_explore.copy = ExploreCopyState();
 }
@@ -1923,14 +1642,14 @@ static void explore_copy_run() {
 }
 
 static void explore_delete_finish() {
-    if (g_explore.dialog.kind == EXPLORER_DIALOG_PROGRESS)
+    if (g_explore.dialog_kind == EXPLORER_DIALOG_PROGRESS)
         explore_dialog_close();
     g_explore.del = ExploreDeleteState();
     explore_copy_refresh_panels();
 }
 
 static void explore_delete_cancel() {
-    if (g_explore.dialog.kind == EXPLORER_DIALOG_PROGRESS)
+    if (g_explore.dialog_kind == EXPLORER_DIALOG_PROGRESS)
         explore_dialog_close();
     g_explore.del = ExploreDeleteState();
 }
@@ -2247,27 +1966,18 @@ void explore_toggle() {
 
         if ((ctrl && vk == 'O') || vk == VK_F10) break;
         if (explore_dialog_focused()) {
-            if (!ctrl && vk == VK_ESCAPE) {
-                if (g_explore.dialog.kind == EXPLORER_DIALOG_OVERWRITE)
-                    explore_copy_cancel();
-                explore_dialog_close();
+            DialogEvent event = dialog_handle_key(g_explore.dialog, vk, ch, ctrl, shift);
+            if (event.kind == DIALOG_EVENT_REDRAW) {
                 explore_draw();
                 continue;
             }
-            if (!ctrl && vk == VK_RETURN) { explore_dialog_confirm(); explore_draw(); continue; }
-            if (ctrl && vk == VK_RETURN && g_explore.dialog.kind == EXPLORER_DIALOG_OVERWRITE) {
-                explore_dialog_confirm_all();
+            if (event.kind == DIALOG_EVENT_SUBMIT) {
+                if (event.button_id == EXPLORER_DIALOG_BUTTON_CANCEL)
+                    explore_dialog_cancel();
+                else
+                    explore_dialog_confirm(event.button_id);
                 explore_draw();
                 continue;
-            }
-            if (g_explore.dialog.kind == EXPLORER_DIALOG_COPY || g_explore.dialog.kind == EXPLORER_DIALOG_MOVE || g_explore.dialog.kind == EXPLORER_DIALOG_MKDIR) {
-                if (!ctrl && vk == VK_LEFT)   { explore_dialog_move_cursor(-1); explore_draw(); continue; }
-                if (!ctrl && vk == VK_RIGHT)  { explore_dialog_move_cursor(+1); explore_draw(); continue; }
-                if (!ctrl && vk == VK_HOME)   { explore_dialog_move_home_end(true); explore_draw(); continue; }
-                if (!ctrl && vk == VK_END)    { explore_dialog_move_home_end(false); explore_draw(); continue; }
-                if (!ctrl && vk == VK_BACK)   { explore_dialog_backspace(); explore_draw(); continue; }
-                if (!ctrl && vk == VK_DELETE) { explore_dialog_delete_char(); explore_draw(); continue; }
-                if (!ctrl && ch >= 32 && ch != 127) { explore_dialog_insert(ch); explore_draw(); continue; }
             }
             continue;
         }

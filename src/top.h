@@ -6,6 +6,7 @@
 #include <psapi.h>
 #include <winternl.h>
 #include <cstdint>
+#include "commandbar.h"
 
 struct proc_entry {
     DWORD       pid;
@@ -59,8 +60,8 @@ static const char* cpu_col(double pct) {
 }
 
 static const char* mem_col(SIZE_T b) {
-    if (b>=(SIZE_T)100*1024*1024) return MAGENTA; // bold magenta, same as ls images
-    return GRAY;
+    (void)b;
+    return "\x1b[38;5;245m";
 }
 
 static const char* name_col(const std::string& n) {
@@ -68,9 +69,20 @@ static const char* name_col(const std::string& n) {
         n=="services.exe"||n=="smss.exe"||n=="wininit.exe"||n=="dwm.exe"||
         n=="System"||n=="Registry"||n=="Idle"||n=="spoolsv.exe"||
         n=="fontdrvhost.exe"||n=="audiodg.exe"||n=="taskhostw.exe"||
-        n=="SearchIndexer.exe"||n=="RuntimeBroker.exe"||n=="sihost.exe")
+        n=="backgroundTaskHost.exe"||n=="dllhost.exe"||n=="conhost.exe"||
+        n=="ApplicationFrameHost.exe"||n=="RuntimeBroker.exe"||
+        n=="SearchHost.exe"||n=="SearchIndexer.exe"||n=="ShellExperienceHost.exe"||
+        n=="StartMenuExperienceHost.exe"||n=="TextInputHost.exe"||n=="WmiPrvSE.exe"||
+        n=="sihost.exe")
         return GRAY;
-    return BLUE;
+
+    switch (entry_color_kind(to_wide(n), false, false)) {
+    case ENTRY_COLOR_EXE:     return GREEN;
+    case ENTRY_COLOR_ARCHIVE: return RED;
+    case ENTRY_COLOR_IMAGE:   return MAGENTA;
+    case ENTRY_COLOR_MEDIA:   return "\x1b[38;5;51m";
+    default:                  return SILVER;
+    }
 }
 
 static std::string top_filter_tail(const std::string& value, int width, int cursor, int& start_out) {
@@ -88,6 +100,34 @@ static std::string top_filter_tail(const std::string& value, int width, int curs
     if (start_out + width > size)
         start_out = std::max(0, size - width);
     return value.substr(start_out, width);
+}
+
+static std::vector<CommandItem> top_commands(bool fmode, bool kill_pending) {
+    if (kill_pending) {
+        return {
+            command_item(L"Y", L"Yes"),
+            command_item(L"N", L"No"),
+            command_item(L"ESC", L"Cancel"),
+        };
+    }
+    if (fmode) {
+        return {
+            command_item(L"ENTER", L"Apply"),
+            command_item(L"ESC", L"Clear"),
+            command_item(L"BACK", L"Erase"),
+            command_item(L"HOME", L"Start"),
+            command_item(L"END", L"End"),
+        };
+    }
+    return {
+        command_item(L"ESC", L"Exit"),
+        command_item(L"M", L"Mem"),
+        command_item(L"C", L"Cpu"),
+        command_item(L"/", L"Filter"),
+        command_item(L"K", L"Kill"),
+        command_item(L"PGUP", L"Up"),
+        command_item(L"PGDN", L"Down"),
+    };
 }
 
 static void top_cmd() {
@@ -219,8 +259,9 @@ static void top_cmd() {
         int rows       = term_height();
         bool show_filter = fmode || !fstr.empty();
         if (show_filter != prev_show_filter) { needs_clear=true; prev_show_filter=show_filter; }
-        int visible    = rows-(show_filter?5:4); // summary + sep + [filter] + sep + pathbar
+        int visible    = rows-(show_filter?6:5); // summary + [filter] + sep + footer + command bar
         if (visible<1) visible=1;
+        std::vector<CommandItem> commands = top_commands(fmode, kill_pending);
 
         if (sel<scroll_top) scroll_top=sel;
         if (sel>=scroll_top+visible) scroll_top=sel-visible+1;
@@ -257,9 +298,9 @@ static void top_cmd() {
 
         // Row 2 (conditional) — Filter bar
         if (show_filter) {
-            std::string line="  "+std::string(GRAY)+"[";
+            std::string line="  ";
             if (fmode) {
-                int inner_w = std::max(1, cols - 5);
+                int inner_w = std::max(1, cols - 2);
                 int start = 0;
                 std::string visible = top_filter_tail(fstr, inner_w, fcur, start);
                 int cursor_pos = std::max(0, std::min(fcur - start, inner_w - 1));
@@ -269,11 +310,11 @@ static void top_cmd() {
                     cursor_ch = std::string(1, visible[fcur - start]);
                 else
                     tail_start = std::min(cursor_pos, (int)visible.size());
-                std::string rebuilt = "  " + std::string(GRAY) + "[";
+                std::string rebuilt = "  ";
                 rebuilt += YELLOW;
                 if (cursor_pos > 0)
                     rebuilt += visible.substr(0, std::min(cursor_pos, (int)visible.size()));
-                rebuilt += "\x1b[48;5;111m\x1b[30m" + cursor_ch + RESET;
+                rebuilt += "\x1b[48;5;226m\x1b[30m" + cursor_ch + RESET;
                 rebuilt += YELLOW;
                 if (tail_start < (int)visible.size())
                     rebuilt += visible.substr(tail_start + (cursor_ch == " " ? 0 : 1));
@@ -282,13 +323,13 @@ static void top_cmd() {
             } else {
                 line+=YELLOW+fstr+"\x1b[39m";
             }
-            line+=std::string(GRAY)+"]\x1b[39m"+RESET;
+            line+=RESET;
             F+=line+"\x1b[K\x1b[0m\r\n";
         }
 
         // Row 3 — Separator (box-drawing ─)
         {
-            F+=GRAY;
+            F+=BLUE;
             for (int i=0;i<cols;i++) F+="\xe2\x94\x80"; // U+2500 ─
             F+="\x1b[0m\r\n";
         }
@@ -307,14 +348,14 @@ static void top_cmd() {
             std::string sname=(p.name.size()>(size_t)name_w)?p.name.substr(0,name_w):p.name;
 
             if (i==sel) {
-                // Plain reverse-video highlight
+                // Match Explorer's active-row highlight.
                 char plain[512];
                 snprintf(plain,sizeof(plain)," %6lu  %5.1f%%  %9s  %-*s",
                     (unsigned long)p.pid,p.cpu,mems.c_str(),name_w,sname.c_str());
                 std::string row(plain);
                 if ((int)row.size()>cols-1) row=row.substr(0,cols-1);
                 while ((int)row.size()<cols-1) row+=' ';
-                F+="\x1b[48;5;75m\x1b[30m"+row+RESET+"\r\n";
+                F+="\x1b[48;5;226m\x1b[30m"+row+RESET+"\r\n";
             } else {
                 // Colored row — build piece by piece, track plain length for padding
                 char pid_s[12]; snprintf(pid_s,sizeof(pid_s)," %6lu",(unsigned long)p.pid);
@@ -334,16 +375,16 @@ static void top_cmd() {
         }
         F+="\x1b[J"; // clear any leftover rows
 
-        // Row n-1 / n — Path bar or kill confirm
+        // Row n-1 / n — Path bar or kill confirm, then command bar
         {
-            F+=GRAY;
+            F+=BLUE;
             for (int i=0;i<cols;i++) F+="\xe2\x94\x80";
             F+="\x1b[0m\r\n";
             if (kill_pending && !filtered.empty()) {
                 const proc_entry& sel_p=*filtered[sel];
                 char conf[512];
                 snprintf(conf,sizeof(conf),
-                    "\x1b[48;5;170m\x1b[30m  Kill %s (PID %lu)? [Y/N]  " RESET,
+                    "\x1b[48;5;203m\x1b[30mKill %s (PID %lu)? [Y/N]" RESET,
                     sel_p.name.c_str(),(unsigned long)sel_p.pid);
                 F+=std::string(conf);
             } else {
@@ -357,7 +398,8 @@ static void top_cmd() {
                 }
                 F+=pathline;
             }
-            F+="\x1b[K\x1b[0m";
+            F+="\x1b[K\x1b[0m\r\n";
+            F+=commandbar_row_vt(commands, std::max(0, cols), 0, false);
         }
 
         out(F);

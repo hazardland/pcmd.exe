@@ -3,7 +3,14 @@
 // Exports : edit_file(), view_file()
 // Depends : common.h, terminal.h, highlight.h
 
+#include "dialog.h"
+#include "commandbar.h"
+
 static const int GUTTER = 4; // "%3d " — 3-digit line number + space
+static const char* EDIT_TOPBAR_BG = "\x1b[48;5;236m";
+static const char* EDIT_TOPBAR_FILE = "\x1b[48;5;236m\x1b[38;5;75m";
+static const char* EDIT_TOPBAR_META = "\x1b[48;5;236m\x1b[38;5;240m";
+static const char* EDIT_TOPBAR_RESET = "\x1b[49m\x1b[39m";
 
 struct edit_op {
     int r0, c0;            // range start (byte offsets into lines)
@@ -27,6 +34,7 @@ struct file_buf {
     int cur_row  = 0;
     int cur_col  = 0;
     int top_row  = 0;
+    int top_chunk = 0;
     int left_col = 0;
     bool wrap    = false;
 
@@ -38,6 +46,13 @@ struct file_buf {
     bool last_was_char = false;  // consecutive word-char typing → merge
     int  last_del_dir  = 0;      // -1=backspace, +1=fwd-delete, 0=none
     int  saved_gen     = 0;      // undo_stack.size() at last save
+};
+
+enum EDIT_DIALOG_BUTTON_ID {
+    EDIT_DIALOG_BUTTON_CLOSE = 1,
+    EDIT_DIALOG_BUTTON_SAVE,
+    EDIT_DIALOG_BUTTON_DISCARD,
+    EDIT_DIALOG_BUTTON_CANCEL,
 };
 
 static bool looks_binary_bytes(const std::string& data) {
@@ -113,24 +128,17 @@ static std::string clip_plain(const std::string& s, int width) {
 }
 
 static int show_binary_notice(const std::string& path, bool readonly) {
+    DialogState dialog;
+    std::wstring summary = readonly ? L"Binary file view is not supported yet." : L"Binary file edit is not supported.";
+    std::wstring detail = to_wide(path);
+    std::replace(detail.begin(), detail.end(), L'\\', L'/');
+    dialog_open_message(dialog, L"Binary file", summary, detail, {
+        dialog_button(EDIT_DIALOG_BUTTON_CLOSE, L"ESC", L"Close", DIALOG_BUTTON_CANCEL, VK_ESCAPE),
+    }, dialog_palette_warning());
+
     auto redraw = [&]() {
-        int H = term_height();
-        int W = term_width();
-        std::string disp = path;
-        std::replace(disp.begin(), disp.end(), '\\', '/');
-
         out("\x1b[2J\x1b[H");
-        int row = std::max(1, H / 2 - 1);
-        auto line = [&](int y, const std::string& text, const std::string& color = "") {
-            char esc[32];
-            snprintf(esc, sizeof(esc), "\x1b[%d;1H\x1b[K", y);
-            std::string body = clip_plain(text, std::max(1, W));
-            out(std::string(esc) + color + body + RESET);
-        };
-
-        line(row, readonly ? "Binary file view is not supported yet." : "Binary file edit is not supported.", YELLOW);
-        line(row + 1, disp, GRAY);
-        line(row + 3, "Press any key to return.", BLUE);
+        dialog_overlay_draw(dialog);
     };
 
     redraw();
@@ -142,7 +150,13 @@ static int show_binary_notice(const std::string& path, bool readonly) {
             redraw();
             continue;
         }
-        if (ir.EventType == KEY_EVENT && ir.Event.KeyEvent.bKeyDown)
+        if (ir.EventType != KEY_EVENT || !ir.Event.KeyEvent.bKeyDown) continue;
+        DWORD state = ir.Event.KeyEvent.dwControlKeyState;
+        bool ctrl = (state & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+        bool shift = (state & SHIFT_PRESSED) != 0;
+        DialogEvent event = dialog_handle_key(dialog, ir.Event.KeyEvent.wVirtualKeyCode,
+            ir.Event.KeyEvent.uChar.UnicodeChar, ctrl, shift);
+        if (event.kind == DIALOG_EVENT_SUBMIT)
             break;
     }
     out("\x1b[2J\x1b[H\x1b[?25h");
@@ -174,6 +188,19 @@ static int utf8_display_col(const std::string& s, int byte_pos) {
         col++;
     }
     return col;
+}
+
+static int utf8_byte_from_display_col(const std::string& s, int display_col) {
+    if (display_col <= 0) return 0;
+    int col = 0;
+    int i = 0;
+    while (i < (int)s.size()) {
+        int next = utf8_next(s, i);
+        if (col >= display_col) break;
+        i = next;
+        col++;
+    }
+    return i;
 }
 
 // ---- Load / save ----
@@ -357,18 +384,119 @@ static void clamp_col(file_buf& f) {
     if (f.cur_col > len) f.cur_col = len;
 }
 
+static int wrap_chunks(const std::string& line, int vis_w) {
+    if (vis_w < 1) return 1;
+    int disp = utf8_display_col(line, (int)line.size());
+    return disp == 0 ? 1 : (disp + vis_w - 1) / vis_w;
+}
+
+static void wrap_advance(const file_buf& f, int vis_w, int& row, int& chunk) {
+    if (f.lines.empty()) {
+        row = 0;
+        chunk = 0;
+        return;
+    }
+    row = std::max(0, std::min(row, (int)f.lines.size() - 1));
+    int chunks = wrap_chunks(f.lines[row], vis_w);
+    if (chunk + 1 < chunks) {
+        chunk++;
+        return;
+    }
+    if (row < (int)f.lines.size() - 1) {
+        row++;
+        chunk = 0;
+        return;
+    }
+    chunk = std::max(0, chunks - 1);
+}
+
+static void wrap_retreat(const file_buf& f, int vis_w, int& row, int& chunk) {
+    if (f.lines.empty()) {
+        row = 0;
+        chunk = 0;
+        return;
+    }
+    row = std::max(0, std::min(row, (int)f.lines.size() - 1));
+    if (chunk > 0) {
+        chunk--;
+        return;
+    }
+    if (row > 0) {
+        row--;
+        chunk = std::max(0, wrap_chunks(f.lines[row], vis_w) - 1);
+        return;
+    }
+    chunk = 0;
+}
+
+static void wrap_move_cursor(file_buf& f, int delta, int vis_w) {
+    clamp_col(f);
+    if (vis_w < 1) return;
+
+    int dc = utf8_display_col(f.lines[f.cur_row], f.cur_col);
+    int target_row = f.cur_row;
+    int target_chunk = dc / vis_w;
+    int intra = dc % vis_w;
+
+    while (delta > 0) {
+        wrap_advance(f, vis_w, target_row, target_chunk);
+        delta--;
+    }
+    while (delta < 0) {
+        wrap_retreat(f, vis_w, target_row, target_chunk);
+        delta++;
+    }
+
+    int target_dc = target_chunk * vis_w + intra;
+    int max_dc = utf8_display_col(f.lines[target_row], (int)f.lines[target_row].size());
+    if (target_dc > max_dc) target_dc = max_dc;
+
+    f.cur_row = target_row;
+    f.cur_col = utf8_byte_from_display_col(f.lines[target_row], target_dc);
+}
+
 static void clamp_scroll(file_buf& f, int vis_rows, int vis_w) {
     if (f.cur_row < 0)                      f.cur_row = 0;
     if (f.cur_row >= (int)f.lines.size())   f.cur_row = (int)f.lines.size() - 1;
     clamp_col(f);
-    if (f.cur_row < f.top_row)              f.top_row = f.cur_row;
-    if (f.cur_row >= f.top_row + vis_rows)  f.top_row = f.cur_row - vis_rows + 1;
-    if (f.top_row < 0) f.top_row = 0;
     if (!f.wrap) {
+        f.top_chunk = 0;
+        if (f.cur_row < f.top_row)              f.top_row = f.cur_row;
+        if (f.cur_row >= f.top_row + vis_rows)  f.top_row = f.cur_row - vis_rows + 1;
+        if (f.top_row < 0) f.top_row = 0;
         int dc = utf8_display_col(f.lines[f.cur_row], f.cur_col);
         if (dc < f.left_col)              f.left_col = dc;
         if (dc >= f.left_col + vis_w)     f.left_col = dc - vis_w + 1;
         if (f.left_col < 0) f.left_col = 0;
+        return;
+    }
+
+    f.left_col = 0;
+    if (f.top_row < 0) f.top_row = 0;
+    if (f.top_row >= (int)f.lines.size()) f.top_row = (int)f.lines.size() - 1;
+    if (f.top_row < 0) f.top_row = 0;
+    f.top_chunk = std::max(0, f.top_chunk);
+    int top_max = wrap_chunks(f.lines[f.top_row], vis_w);
+    if (f.top_chunk >= top_max) f.top_chunk = top_max - 1;
+
+    int cur_chunk = utf8_display_col(f.lines[f.cur_row], f.cur_col) / std::max(1, vis_w);
+    if (f.cur_row < f.top_row || (f.cur_row == f.top_row && cur_chunk < f.top_chunk)) {
+        f.top_row = f.cur_row;
+        f.top_chunk = cur_chunk;
+        return;
+    }
+
+    int row = f.top_row;
+    int chunk = f.top_chunk;
+    int distance = 0;
+    while (row < f.cur_row || (row == f.cur_row && chunk < cur_chunk)) {
+        wrap_advance(f, vis_w, row, chunk);
+        distance++;
+    }
+
+    while (distance >= vis_rows) {
+        wrap_advance(f, vis_w, f.top_row, f.top_chunk);
+        distance--;
     }
 }
 
@@ -409,9 +537,9 @@ static std::vector<row_info> build_screen(const file_buf& f, int vis_rows, int v
     v.reserve(vis_rows);
     for (int fr = f.top_row; fr < (int)f.lines.size() && (int)v.size() < vis_rows; fr++) {
         if (f.wrap) {
-            int disp   = utf8_display_col(f.lines[fr], (int)f.lines[fr].size());
-            int chunks = (disp == 0) ? 1 : (disp + vis_w - 1) / vis_w;
-            for (int c = 0; c < chunks && (int)v.size() < vis_rows; c++)
+            int chunks = wrap_chunks(f.lines[fr], vis_w);
+            int start = (fr == f.top_row) ? f.top_chunk : 0;
+            for (int c = start; c < chunks && (int)v.size() < vis_rows; c++)
                 v.push_back({fr, c * vis_w});
         } else {
             v.push_back({fr, f.left_col});
@@ -526,14 +654,57 @@ static std::string render_content(const std::string& raw, int col_start, int vis
     return overlay_sel(clipped, vis_ss, vis_se);
 }
 
+static std::vector<CommandItem> edit_commands(const file_buf& f, bool readonly) {
+    std::vector<CommandItem> items;
+    items.push_back(command_item(L"ESC", L"Exit"));
+    if (!readonly) {
+        items.push_back(command_item(L"CTRL+S", L"Save"));
+        items.push_back(command_item(L"CTRL+Z", L"Undo"));
+        items.push_back(command_item(L"CTRL+Y", L"Redo"));
+    }
+    items.push_back(command_item(L"ALT+Z", f.wrap ? L"NoWrap" : L"Wrap"));
+    return items;
+}
+
+static std::string edit_status_text(const file_buf& f, bool readonly, int& visible_width) {
+    visible_width = 0;
+
+    std::string disp = f.path;
+    std::replace(disp.begin(), disp.end(), '\\', '/');
+    size_t sl = disp.rfind('/');
+    std::string fname = (sl != std::string::npos) ? disp.substr(sl + 1) : disp;
+    if (fname.empty()) fname = disp;
+
+    std::string line;
+    line += EDIT_TOPBAR_FILE + fname + EDIT_TOPBAR_META;
+    visible_width += (int)fname.size();
+    if (f.modified) {
+        line += std::string(EDIT_TOPBAR_FILE) + "*" + EDIT_TOPBAR_META;
+        visible_width++;
+    }
+
+    char info[48];
+    snprintf(info, sizeof(info), "  %d:%d  ", f.cur_row + 1, f.cur_col + 1);
+    std::string meta = info;
+    meta += f.crlf ? "CRLF" : "LF";
+    if (f.wrap) meta += "  WRAP";
+    if (readonly) meta += "  VIEW";
+
+    line += meta + EDIT_TOPBAR_RESET;
+    visible_width += (int)meta.size();
+    return line;
+}
+
 static void draw(const file_buf& f, lang l, bool readonly = false) {
     int H        = term_height();
     int W        = term_width();
-    int vis_rows = H - 1;
+    int vis_rows = H - 2;
     int vis_w    = W - GUTTER;
     if (vis_w < 1) vis_w = 1;
+    if (vis_rows < 1) vis_rows = 1;
 
     auto rows = build_screen(f, vis_rows, vis_w);
+    std::vector<CommandItem> commands = edit_commands(f, readonly);
 
     // normalize selection for rendering
     bool has_sel = f.sel_row >= 0;
@@ -546,9 +717,18 @@ static void draw(const file_buf& f, lang l, bool readonly = false) {
     s += "\x1b[?25l";  // hide cursor during redraw
     s += "\x1b[H";     // top-left
 
+    // status bar uses the top row
+    {
+        char esc[32];
+        snprintf(esc, sizeof(esc), "\x1b[%d;1H", 1);
+        s += esc + std::string(EDIT_TOPBAR_BG) + "\x1b[K";
+        int footer_width = 0;
+        s += clip_ansi(edit_status_text(f, readonly, footer_width), 0, std::max(0, W));
+    }
+
     for (int sr = 0; sr < vis_rows; sr++) {
         char esc[32];
-        snprintf(esc, sizeof(esc), "\x1b[%d;1H", sr + 1);
+        snprintf(esc, sizeof(esc), "\x1b[%d;1H", sr + 2);
         s += esc;
 
         if (sr < (int)rows.size()) {
@@ -564,8 +744,10 @@ static void draw(const file_buf& f, lang l, bool readonly = false) {
             s += GRAY + std::string(gut) + RESET;
 
             // content
-            int col_end = f.wrap ? (int)raw.size() : ri.col_start + vis_w;
-            s += render_content(raw, ri.col_start, col_end, has_sel, ri.file_row,
+            // Each visual row must emit at most the visible editor width.
+            // Passing a wider span here lets wrapped or horizontally scrolled
+            // lines spill into the UI rows and corrupt cursor/navigation state.
+            s += render_content(raw, ri.col_start, vis_w, has_sel, ri.file_row,
                                  ar, ac, br, bc, l);
         } else {
             s += GRAY "    " RESET;
@@ -573,35 +755,17 @@ static void draw(const file_buf& f, lang l, bool readonly = false) {
         s += "\x1b[K";  // clear to end of line
     }
 
-    // status bar (last row)
+    // command bar uses the bottom row
     {
         char esc[32];
         snprintf(esc, sizeof(esc), "\x1b[%d;1H", H);
         s += esc + std::string("\x1b[K");
-
-        // left side: filename + modified marker
-        std::string disp = f.path;
-        std::replace(disp.begin(), disp.end(), '\\', '/');
-        size_t sl = disp.rfind('/');
-        std::string fname = (sl != std::string::npos) ? disp.substr(sl + 1) : disp;
-        if (fname.empty()) fname = disp;
-
-        s += BLUE + fname + RESET;
-        if (f.modified) s += BLUE "*" RESET;
-
-        char info[48];
-        snprintf(info, sizeof(info), "  %d:%d  ", f.cur_row + 1, f.cur_col + 1);
-        s += GRAY + std::string(info);
-        s += f.crlf ? "CRLF" : "LF";
-        if (f.wrap) s += "  WRAP";
-        if (readonly) s += "  VIEW";
-        s += RESET;
-
+        s += commandbar_row_vt(commands, std::max(0, W), 0, false);
     }
 
     // cursor position
     {
-        int sc_row = 1, sc_col = GUTTER + 1;
+        int sc_row = 2, sc_col = GUTTER + 1;
         int dc = utf8_display_col(f.lines[f.cur_row], f.cur_col);
         for (int sr = 0; sr < (int)rows.size(); sr++) {
             const row_info& ri = rows[sr];
@@ -609,7 +773,7 @@ static void draw(const file_buf& f, lang l, bool readonly = false) {
             int next_cs = (sr + 1 < (int)rows.size() && rows[sr + 1].file_row == f.cur_row)
                           ? rows[sr + 1].col_start : INT_MAX;
             if (dc >= ri.col_start && dc < next_cs) {
-                sc_row = sr + 1;
+                sc_row = sr + 2;
                 sc_col = GUTTER + (dc - ri.col_start) + 1;
                 break;
             }
@@ -667,11 +831,17 @@ static int edit_file_mode(const std::string& path, bool readonly) {
     load(f);
     lang l = detect_lang(f.path);
 
+    DWORD saved_out_mode = 0;
+    bool restore_out_mode = GetConsoleMode(out_h, &saved_out_mode) != 0;
+    if (restore_out_mode)
+        SetConsoleMode(out_h, saved_out_mode & ~ENABLE_WRAP_AT_EOL_OUTPUT);
+    out("\x1b[?7l");
+
     int H, W, vis_rows, vis_w;
     auto refresh_dims = [&]() {
         H        = term_height();
         W        = term_width();
-        vis_rows = H - 1;  // last row = status bar
+        vis_rows = H - 2;  // top row = status bar, bottom row = command bar
         vis_w    = W - GUTTER;
         if (vis_rows < 1) vis_rows = 1;
         if (vis_w < 1)    vis_w    = 1;
@@ -725,29 +895,33 @@ static int edit_file_mode(const std::string& path, bool readonly) {
 
         if ((ctrl && vk == 'Q') || vk == VK_ESCAPE) {
             if (f.modified) {
-                // show 3-way prompt in hint bar
-                auto show_prompt = [&]() {
-                    char esc2[32];
-                    snprintf(esc2, sizeof(esc2), "\x1b[%d;1H\x1b[K", term_height());
-                    out(std::string(esc2) +
-                        BLUE "Save?" RESET " "
-                        "Y" GRAY "es" RESET " "
-                        "N" GRAY "o" RESET);
-                };
-                show_prompt();
+                DialogState dialog;
+                dialog_open_message(dialog, L"Save", L"File has unsaved changes", L"", {
+                    dialog_button(EDIT_DIALOG_BUTTON_SAVE, L"Y", L"Yes", DIALOG_BUTTON_CONFIRM, 'Y', false, false, L'y'),
+                    dialog_button(EDIT_DIALOG_BUTTON_DISCARD, L"N", L"No", DIALOG_BUTTON_CAUTION, 'N', false, false, L'n'),
+                    dialog_button(EDIT_DIALOG_BUTTON_CANCEL, L"ESC", L"Cancel", DIALOG_BUTTON_CANCEL, VK_ESCAPE),
+                });
+                dialog_overlay_draw(dialog);
                 while (true) {
                     INPUT_RECORD ir2; DWORD c2;
                     if (!ReadConsoleInputW(in_h, &ir2, 1, &c2)) { quit = true; break; }
                     if (ir2.EventType == WINDOW_BUFFER_SIZE_EVENT) {
                         refresh_dims(); clamp_scroll(f, vis_rows, vis_w);
-                        draw(f, l, readonly); show_prompt(); continue;
+                        draw(f, l, readonly); dialog_overlay_draw(dialog); continue;
                     }
                     if (ir2.EventType != KEY_EVENT || !ir2.Event.KeyEvent.bKeyDown) continue;
-                    wchar_t ch2 = ir2.Event.KeyEvent.uChar.UnicodeChar;
-                    WORD vk2 = ir2.Event.KeyEvent.wVirtualKeyCode;
-                    if (ch2 == 'y' || ch2 == 'Y') { save(f); quit = true; break; }
-                    if (ch2 == 'n' || ch2 == 'N') { quit = true; break; }
-                    if (ch2 == 'c' || ch2 == 'C' || vk2 == VK_ESCAPE) { draw(f, l, readonly); break; }
+                    DWORD state2 = ir2.Event.KeyEvent.dwControlKeyState;
+                    bool ctrl2 = (state2 & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+                    bool shift2 = (state2 & SHIFT_PRESSED) != 0;
+                    DialogEvent event = dialog_handle_key(dialog,
+                        ir2.Event.KeyEvent.wVirtualKeyCode,
+                        ir2.Event.KeyEvent.uChar.UnicodeChar,
+                        ctrl2, shift2);
+                    if (event.kind != DIALOG_EVENT_SUBMIT) continue;
+                    if (event.button_id == EDIT_DIALOG_BUTTON_SAVE) { save(f); quit = true; break; }
+                    if (event.button_id == EDIT_DIALOG_BUTTON_DISCARD) { quit = true; break; }
+                    draw(f, l, readonly);
+                    break;
                 }
             } else {
                 quit = true;
@@ -869,13 +1043,23 @@ static int edit_file_mode(const std::string& path, bool readonly) {
 
         if (vk == VK_UP) {
             if (shift) sel_begin(f); else sel_clear(f);
-            if (f.cur_row > 0) { f.cur_row--; clamp_col(f); }
+            if (f.wrap) {
+                wrap_move_cursor(f, -1, vis_w);
+            } else if (f.cur_row > 0) {
+                f.cur_row--;
+                clamp_col(f);
+            }
             clamp_scroll(f, vis_rows, vis_w); draw(f, l, readonly); continue;
         }
 
         if (vk == VK_DOWN) {
             if (shift) sel_begin(f); else sel_clear(f);
-            if (f.cur_row < (int)f.lines.size() - 1) { f.cur_row++; clamp_col(f); }
+            if (f.wrap) {
+                wrap_move_cursor(f, 1, vis_w);
+            } else if (f.cur_row < (int)f.lines.size() - 1) {
+                f.cur_row++;
+                clamp_col(f);
+            }
             clamp_scroll(f, vis_rows, vis_w); draw(f, l, readonly); continue;
         }
 
@@ -925,6 +1109,7 @@ static int edit_file_mode(const std::string& path, bool readonly) {
         if (vk == VK_PRIOR) {  // Page Up
             sel_clear(f);
             if (ctrl) { f.cur_row = 0; f.cur_col = 0; }
+            else if (f.wrap) { wrap_move_cursor(f, -(vis_rows - 1), vis_w); }
             else { f.cur_row -= vis_rows - 1; clamp_col(f); }
             clamp_scroll(f, vis_rows, vis_w); draw(f, l, readonly); continue;
         }
@@ -934,6 +1119,8 @@ static int edit_file_mode(const std::string& path, bool readonly) {
             if (ctrl) {
                 f.cur_row = (int)f.lines.size() - 1;
                 f.cur_col = (int)f.lines[f.cur_row].size();
+            } else if (f.wrap) {
+                wrap_move_cursor(f, vis_rows - 1, vis_w);
             } else {
                 f.cur_row += vis_rows - 1;
                 clamp_col(f);
@@ -1206,7 +1393,9 @@ static int edit_file_mode(const std::string& path, bool readonly) {
     }
 
     // clear editor screen before returning to shell
-    out("\x1b[2J\x1b[H\x1b[?25h");
+    out("\x1b[2J\x1b[H\x1b[?25h\x1b[?7h");
+    if (restore_out_mode)
+        SetConsoleMode(out_h, saved_out_mode);
     return 0;
 }
 
