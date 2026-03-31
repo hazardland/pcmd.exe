@@ -56,7 +56,7 @@ static std::string ls_color(const WIN32_FIND_DATAW& fd) {
     case ENTRY_COLOR_HIDDEN:  return GRAY;
     case ENTRY_COLOR_DIR:     return BLUE;
     case ENTRY_COLOR_EXE:     return GREEN;
-    case ENTRY_COLOR_ARCHIVE: return RED;
+    case ENTRY_COLOR_ARCHIVE: return ARCHIVE_RED;
     case ENTRY_COLOR_IMAGE:   return MAGENTA;
     case ENTRY_COLOR_MEDIA:   return "\x1b[38;5;51m";
     default:                  return LS_COLOR_FILE;

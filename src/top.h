@@ -78,7 +78,7 @@ static const char* name_col(const std::string& n) {
 
     switch (entry_color_kind(to_wide(n), false, false)) {
     case ENTRY_COLOR_EXE:     return GREEN;
-    case ENTRY_COLOR_ARCHIVE: return RED;
+    case ENTRY_COLOR_ARCHIVE: return ARCHIVE_RED;
     case ENTRY_COLOR_IMAGE:   return MAGENTA;
     case ENTRY_COLOR_MEDIA:   return "\x1b[38;5;51m";
     default:                  return SILVER;

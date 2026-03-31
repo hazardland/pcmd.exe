@@ -34,6 +34,7 @@
 #define MAGENTA "\x1b[1;35m"
 #define GREEN  "\x1b[38;5;77m"
 #define SILVER "\x1b[38;5;250m"
+#define ARCHIVE_RED "\x1b[38;5;210m"
 #define RESET  "\x1b[0m"
 
 // Console handles initialised once in main and used by all I/O functions.
