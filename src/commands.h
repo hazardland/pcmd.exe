@@ -42,40 +42,25 @@ void cd(const std::string& line) {
         prev_dir = before;
 }
 
+static const char* LS_COLOR_FILE = "\x1b[38;5;248m";
+static const char* LS_COLOR_SIZE = "\x1b[38;5;245m";
+
 // Maps a directory entry to its ANSI color escape.
 static std::string ls_color(const WIN32_FIND_DATAW& fd) {
-    bool is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-    bool hidden = (fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
-    if (hidden) return GRAY;
-    if (is_dir) return BLUE;
     std::wstring name = fd.cFileName;
-    size_t dot = name.rfind(L'.');
-    if (dot == std::wstring::npos) return "";
-    std::wstring ext = name.substr(dot);
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
+    bool is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    bool is_hidden = (fd.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) != 0 ||
+        (!name.empty() && name[0] == L'.');
 
-    if (ext == L".exe" || ext == L".bat" || ext == L".cmd" ||
-        ext == L".ps1" || ext == L".msi")
-        return GREEN;
-
-    if (ext == L".zip" || ext == L".tar" || ext == L".gz"  || ext == L".tgz" ||
-        ext == L".bz2" || ext == L".xz"  || ext == L".7z"  || ext == L".rar" ||
-        ext == L".z"   || ext == L".lz"  || ext == L".lzma"|| ext == L".zst" ||
-        ext == L".deb" || ext == L".rpm" || ext == L".cab" || ext == L".iso")
-        return "\x1b[1;31m";
-
-    if (ext == L".jpg"  || ext == L".jpeg" || ext == L".png"  || ext == L".gif"  ||
-        ext == L".bmp"  || ext == L".tif"  || ext == L".tiff" || ext == L".svg"  ||
-        ext == L".webp" || ext == L".ico"  || ext == L".raw"  || ext == L".heic")
-        return MAGENTA;
-
-    if (ext == L".mp3"  || ext == L".wav"  || ext == L".ogg"  || ext == L".flac" ||
-        ext == L".aac"  || ext == L".m4a"  || ext == L".wma"  ||
-        ext == L".mp4"  || ext == L".mkv"  || ext == L".avi"  || ext == L".mov"  ||
-        ext == L".wmv"  || ext == L".flv"  || ext == L".webm" || ext == L".m4v")
-        return "\x1b[36m";
-
-    return "";
+    switch (entry_color_kind(name, is_dir, is_hidden)) {
+    case ENTRY_COLOR_HIDDEN:  return GRAY;
+    case ENTRY_COLOR_DIR:     return BLUE;
+    case ENTRY_COLOR_EXE:     return GREEN;
+    case ENTRY_COLOR_ARCHIVE: return RED;
+    case ENTRY_COLOR_IMAGE:   return MAGENTA;
+    case ENTRY_COLOR_MEDIA:   return "\x1b[38;5;51m";
+    default:                  return LS_COLOR_FILE;
+    }
 }
 
 // Lists a directory with ANSI colors. Flags: -a all -s sort/size -t sort/time -l long -r reverse.
@@ -216,7 +201,10 @@ void ls(const std::string& arg, const std::string& filter = "") {
         row += std::string(max_w - vis_w + 2, ' ');
         if (show_size) {
             std::string sz = e.is_dir ? "" : fmt_size(e.size);
-            row += std::string(std::max(0, 6 - (int)sz.size()), ' ') + sz + "  ";
+            std::string padded = std::string(std::max(0, 6 - (int)sz.size()), ' ') + sz;
+            if (!sz.empty()) row += std::string(LS_COLOR_SIZE) + padded + RESET;
+            else row += padded;
+            row += "  ";
         }
         if (show_time) row += GRAY + fmt_time(e.mtime) + RESET;
         out(row + "\r\n");

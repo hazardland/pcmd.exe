@@ -33,6 +33,7 @@
 #define BRIGHT_YELLOW "\x1b[38;5;226m"
 #define MAGENTA "\x1b[1;35m"
 #define GREEN  "\x1b[38;5;77m"
+#define SILVER "\x1b[38;5;250m"
 #define RESET  "\x1b[0m"
 
 // Console handles initialised once in main and used by all I/O functions.
@@ -41,6 +42,16 @@ static HANDLE err_h;
 static HANDLE in_h;
 // Saved input mode; restored before spawning child processes so they receive normal input handling.
 static DWORD  orig_in_mode;
+
+enum ENTRY_COLOR_KIND {
+    ENTRY_COLOR_FILE = 0,
+    ENTRY_COLOR_DIR,
+    ENTRY_COLOR_EXE,
+    ENTRY_COLOR_ARCHIVE,
+    ENTRY_COLOR_IMAGE,
+    ENTRY_COLOR_MEDIA,
+    ENTRY_COLOR_HIDDEN,
+};
 
 // Convert wide string to UTF-8; used when writing wstring data to the console or history file.
 std::string to_utf8(const std::wstring& ws) {
@@ -70,6 +81,39 @@ void out(const std::string& s) {
 void err(const std::string& s) {
     DWORD w;
     WriteFile(err_h, s.c_str(), (DWORD)s.size(), &w, NULL);
+}
+
+static ENTRY_COLOR_KIND entry_color_kind(const std::wstring& name, bool is_dir, bool is_hidden) {
+    if (is_hidden) return ENTRY_COLOR_HIDDEN;
+    if (is_dir) return ENTRY_COLOR_DIR;
+
+    size_t dot = name.rfind(L'.');
+    if (dot == std::wstring::npos) return ENTRY_COLOR_FILE;
+
+    std::wstring ext = name.substr(dot);
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
+
+    if (ext == L".exe" || ext == L".bat" || ext == L".cmd" || ext == L".ps1" || ext == L".msi")
+        return ENTRY_COLOR_EXE;
+
+    if (ext == L".zip" || ext == L".tar" || ext == L".gz" || ext == L".tgz" ||
+        ext == L".bz2" || ext == L".xz" || ext == L".7z" || ext == L".rar" ||
+        ext == L".z" || ext == L".lz" || ext == L".lzma" || ext == L".zst" ||
+        ext == L".deb" || ext == L".rpm" || ext == L".cab" || ext == L".iso")
+        return ENTRY_COLOR_ARCHIVE;
+
+    if (ext == L".jpg" || ext == L".jpeg" || ext == L".png" || ext == L".gif" ||
+        ext == L".bmp" || ext == L".tif" || ext == L".tiff" || ext == L".svg" ||
+        ext == L".webp" || ext == L".ico" || ext == L".raw" || ext == L".heic")
+        return ENTRY_COLOR_IMAGE;
+
+    if (ext == L".mp3" || ext == L".wav" || ext == L".ogg" || ext == L".flac" ||
+        ext == L".aac" || ext == L".m4a" || ext == L".wma" ||
+        ext == L".mp4" || ext == L".mkv" || ext == L".avi" || ext == L".mov" ||
+        ext == L".wmv" || ext == L".flv" || ext == L".webm" || ext == L".m4v")
+        return ENTRY_COLOR_MEDIA;
+
+    return ENTRY_COLOR_FILE;
 }
 
 // Strip surrounding quotes and normalize forward slashes to backslashes.

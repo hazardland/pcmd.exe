@@ -1,7 +1,17 @@
 // MODULE: terminal
-// Purpose : terminal dimension queries
+// Purpose : terminal dimension queries and shared VT UI notes
 // Exports : term_width() term_height()
 // Depends : common.h
+//
+// VT UI technique for fullscreen tools:
+// - Prefer the VT alternate screen over CreateConsoleScreenBuffer for new full-screen UIs.
+// - Enter with ESC[?1049h and leave with ESC[?1049l so the original shell view comes back cleanly.
+// - Hide/show cursor with ESC[?25l and ESC[?25h while the UI owns the screen.
+// - Render with the same VT color sequences the shell already uses, instead of legacy WORD attributes.
+// - Keep an in-memory frame buffer (chars + styles) and diff against the previous frame so redraws stay fast.
+// - Query visible size from the active terminal window, then move the cursor with ESC[row;colH when painting.
+// - This is the preferred path for future full-screen tools such as top, resmon, and edit because it keeps
+//   colors consistent with the normal terminal and avoids classic console buffer palette mismatches.
 
 // Returns the visible column count of the terminal window; falls back to 80 if not a real console.
 int term_width() {
