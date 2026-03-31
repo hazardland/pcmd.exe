@@ -21,6 +21,7 @@ struct file_buf {
     bool crlf        = false;
     bool trailing_nl = true;
     std::string path;
+    std::wstring wpath;
     bool modified    = false;
 
     int cur_row  = 0;
@@ -51,15 +52,57 @@ static bool looks_binary_bytes(const std::string& data) {
     return suspicious > (int)data.size() / 10;
 }
 
-static bool probe_binary_file(const std::string& path) {
-    std::ifstream ifs(path, std::ios::binary);
-    if (!ifs) return false;
+static bool read_file_bytes(const std::wstring& path, std::string& out) {
+    FILE* fp = _wfopen(path.c_str(), L"rb");
+    if (!fp) return false;
 
-    char buf[4096];
-    ifs.read(buf, sizeof(buf));
-    std::streamsize got = ifs.gcount();
-    if (got <= 0) return false;
-    return looks_binary_bytes(std::string(buf, (size_t)got));
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return false;
+    }
+    long size = ftell(fp);
+    if (size < 0) {
+        fclose(fp);
+        return false;
+    }
+    rewind(fp);
+
+    out.resize((size_t)size);
+    if (size > 0) {
+        size_t got = fread(&out[0], 1, (size_t)size, fp);
+        if (got != (size_t)size) {
+            fclose(fp);
+            out.clear();
+            return false;
+        }
+    }
+    fclose(fp);
+    return true;
+}
+
+static bool write_file_bytes(const std::wstring& path, const std::string& data) {
+    FILE* fp = _wfopen(path.c_str(), L"wb");
+    if (!fp) return false;
+    if (!data.empty()) {
+        size_t put = fwrite(data.data(), 1, data.size(), fp);
+        if (put != data.size()) {
+            fclose(fp);
+            return false;
+        }
+    }
+    fclose(fp);
+    return true;
+}
+
+static bool probe_binary_file(const std::wstring& path) {
+    std::string data;
+    if (!read_file_bytes(path, data))
+        return false;
+
+    if (data.size() > 4096)
+        data.resize(4096);
+
+    return !data.empty() && looks_binary_bytes(data);
 }
 
 static std::string clip_plain(const std::string& s, int width) {
@@ -136,15 +179,13 @@ static int utf8_display_col(const std::string& s, int byte_pos) {
 // ---- Load / save ----
 
 static void load(file_buf& f) {
-    std::ifstream ifs(f.path, std::ios::binary);
-    if (!ifs) {
+    std::string data;
+    if (!read_file_bytes(f.wpath, data)) {
         f.lines.push_back("");
         f.crlf        = false;
         f.trailing_nl = true;
         return;
     }
-    std::string data((std::istreambuf_iterator<char>(ifs)),
-                      std::istreambuf_iterator<char>());
     f.crlf        = (data.find("\r\n") != std::string::npos);
     f.trailing_nl = !data.empty() && data.back() == '\n';
     data.erase(std::remove(data.begin(), data.end(), '\r'), data.end());
@@ -155,14 +196,14 @@ static void load(file_buf& f) {
 }
 
 static void save(file_buf& f) {
-    std::ofstream ofs(f.path, std::ios::binary);
-    if (!ofs) return;
     const std::string nl = f.crlf ? "\r\n" : "\n";
+    std::string data;
     for (int i = 0; i < (int)f.lines.size(); i++) {
-        ofs.write(f.lines[i].c_str(), (std::streamsize)f.lines[i].size());
+        data += f.lines[i];
         if (i < (int)f.lines.size() - 1 || f.trailing_nl)
-            ofs.write(nl.c_str(), (std::streamsize)nl.size());
+            data += nl;
     }
+    if (!write_file_bytes(f.wpath, data)) return;
     f.modified = false;
 }
 
@@ -620,7 +661,8 @@ static void do_paste(file_buf& f) {
 static int edit_file_mode(const std::string& path, bool readonly) {
     file_buf f;
     f.path = normalize_path(path);
-    if (probe_binary_file(f.path))
+    f.wpath = to_wide(f.path);
+    if (probe_binary_file(f.wpath))
         return show_binary_notice(f.path, readonly);
     load(f);
     lang l = detect_lang(f.path);

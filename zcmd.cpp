@@ -9,11 +9,11 @@
 #include "src/info.h"     // elevated, cur_time, cwd, folder, branch, dirty
 #include "src/prompt.h"   // prompt_t, make_prompt
 #include "src/complete.h" // complete() — tab completion
-void zex_toggle();
+void explore_toggle();
 #include "src/input.h"    // struct input, find_hint, redraw, readline (calls append_history via fwd-decl)
 #include "src/persist.h"  // history, aliases, prev_dir (defines append_history used above)
 #include "src/commands.h" // cd, ls, run, run_bash, which, rule
-#include "src/zex.h"      // zex_toggle(), ZEX screen-buffer UI
+#include "src/explore.h"  // explore_toggle(), Explore screen-buffer UI
 #include "src/image.h"    // cat_image, imgpush_cell (shared with video.h)
 #include "src/video.h"    // cat_video (uses imgpush_cell from image.h)
 #include "src/highlight.h" // detect_lang, colorize_inline, colorize_line
@@ -27,7 +27,8 @@ void zex_toggle();
 #include "src/timer.h"   // timer_cmd()
 #include "src/json.h"    // json_fmt()
 #include "src/top.h"     // top_cmd()
-#include "src/mp3.h"     // mp3_cmd(), mp3_shutdown()
+#include "src/resmon.h"  // resmon_cmd()
+#include "src/play.h"    // play_cmd(), play_shutdown()
 #include "src/yt.h"      // yt_cmd()
 
 int main() {
@@ -125,7 +126,7 @@ int main() {
         std::string lower = line;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
 
-        if (lower == "exit") { mp3_shutdown(); compact_history(); save_prev_dir(); break; }
+        if (lower == "exit") { play_shutdown(); compact_history(); save_prev_dir(); break; }
 
         // alias / unalias
         if (lower == "alias") {
@@ -190,10 +191,11 @@ int main() {
                 GREEN "notes" RESET "    Open ~/notes.md in the editor\r\n"
                 GREEN "ip" RESET "       Show local IPv4 addresses\r\n"
                 GREEN "top" RESET "      Interactive process viewer  [↑↓] navigate  [m/c] sort  [k] kill  [q] quit\r\n"
+                GREEN "resmon" RESET "   Live system monitor  cpu ram power network  Esc/q exit\r\n"
                 GREEN "clock" RESET "    Live fullscreen clock  any key to exit\r\n"
                 GREEN "stopw" RESET "    Stopwatch counting up  any key stops and prints result\r\n"
-                GREEN "mp3" RESET "      Play MP3 file or folder (shuffled)  next/prev/pause/resume/stop/vol/status/ui\r\n"
-                GREEN "play" RESET "     Alias for mp3\r\n"
+                GREEN "explore" RESET "  Two-panel file manager  Ctrl+O/F10 toggle\r\n"
+                GREEN "play" RESET "     Play MP3 file or folder (shuffled)  next/prev/pause/resume/stop/vol/status/ui\r\n"
                 GREEN "yt" RESET "       YouTube downloader  yt mp3 <url> [folder]  yt mp4 <url> [folder]\r\n"
                 GREEN "calc" RESET "     Evaluate arithmetic  calc (2+3)*4^2\r\n"
                 "        Alias: = (2+3)*4^2\r\n"
@@ -233,6 +235,12 @@ int main() {
             continue;
         }
 
+        if (lower == "resmon") {
+            resmon_cmd();
+            last_code = 0;
+            continue;
+        }
+
         if (lower == "notes") {
             last_code = note_cmd();
             continue;
@@ -256,8 +264,8 @@ int main() {
             continue;
         }
 
-        if (lower == "mp3" || (lower.size() >= 4 && lower.substr(0, 4) == "mp3 ")) {
-            last_code = mp3_cmd(line);
+        if (lower == "play" || (lower.size() >= 5 && lower.substr(0, 5) == "play ")) {
+            last_code = play_cmd(line);
             continue;
         }
 
@@ -446,7 +454,9 @@ int main() {
         }
     }
 
-    mp3_shutdown();
+    play_shutdown();
     return 0;
 }
+
+
 

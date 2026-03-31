@@ -1,27 +1,24 @@
-# MP3 player:
-- plan Shuffle in folder and implement
-- More detailed audio visualizer using image cat squares?
-
 # cat *.mp4
-- Sound
-
-# Midnight Commander 
-- ctrl+o immidiatly toggles to terminal and to commander it is seamless and you can jump navigate jump back and so on changing folder changes folder in terminal mode also
-- commander can navigate folders middnight commander style
-- it has two pannels and TAB toggles each pannel activation
-- can select folders and files with INSERT key selectet entries become different color
-- can copy selected folders and files/or single active row selection from one panels path to another
-- can move from selected folders and files/or single active row selection from one panel to another
-- can delete selected folders and files/or single active selection 
-- on top of pannel you type a filter word pattern which can include * symbol for example *.zip, default filter is probably file_start* so you do not need to type *? This needs to be better planned
-- it would be better to use built in cp and rm and mv commands but how do we update progress
+ . This is for future but we should come up with some clever way and high performance solution to add sound to video playback
 
 
 # Pipes
-- make builtin commands work with pipes with outer tools
+ . make builtin commands work with pipes with outer tools, this really makes me thinking because outside grep does not see our command output, but if we implement this, while implementing it we should not by anu means compromise performance, or accept any drowback that ruins already established comfortable experience
 
-# Resource monitor command
-- Cpu cores loads whatever standart windows api provides
-- GPU whatever standard windows api provides
-- temperature and battery if anything with standard windows api is accessable
-- any thing interesting to monitor system via standard windows api
+
+# Explorer
+    . Long names should hide if no space on tab, now they are hiding but with unicode chars in filename there could be some edge case?
+    Rename: I delete path in move i.e. not full path it means I am naming new name?
+        Should work on folder and on file
+
+    . Hardest main challange of explorer is whyle CTRL+O toggle brings the comfort it was meant to it ruins original terminal colors when switched back, the speed of toggle and experience is important but we should come up with out of the box solution to keep same colors and the Explorer has also some dimmed collors
+
+# Top
+    In top filter do same cursor system as in explorer filter
+
+# Edit
+    Display edit dialog like in file explorer with buttons?
+
+# Resmon
+    I have seen cool resmon in reddit which instead of progressbars displays short history graph of resource, like in our mp3 player.h audio visualiser where we display waves of audio in short window, we can aggregate short history of progressbar values and display them scrolling to the left
+

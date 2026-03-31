@@ -12,23 +12,24 @@ static bool is_video_ext(const std::string& path) {
 }
 
 static int cat_video(const std::string& path) {
+    std::wstring wpath = to_wide(path);
     int vid_w = 0, vid_h = 0;
     double duration = 0.0;
     {
-        char probe[2048];
-        snprintf(probe, sizeof(probe),
-            "ffprobe -v error -select_streams v:0"
-            " -show_entries stream=width,height -of csv=p=0 \"%s\"",
-            path.c_str());
-        FILE* fp = _popen(probe, "r");
+        wchar_t probe[2048];
+        swprintf(probe, 2048,
+            L"ffprobe -v error -select_streams v:0"
+            L" -show_entries stream=width,height -of csv=p=0 \"%ls\"",
+            wpath.c_str());
+        FILE* fp = _wpopen(probe, L"r");
         if (fp) { fscanf(fp, "%d,%d", &vid_w, &vid_h); _pclose(fp); }
     }
     {
-        char probe[2048];
-        snprintf(probe, sizeof(probe),
-            "ffprobe -v error -show_entries format=duration -of csv=p=0 \"%s\"",
-            path.c_str());
-        FILE* fp = _popen(probe, "r");
+        wchar_t probe[2048];
+        swprintf(probe, 2048,
+            L"ffprobe -v error -show_entries format=duration -of csv=p=0 \"%ls\"",
+            wpath.c_str());
+        FILE* fp = _wpopen(probe, L"r");
         if (fp) { fscanf(fp, "%lf", &duration); _pclose(fp); }
     }
     if (vid_w <= 0 || vid_h <= 0) {
@@ -57,13 +58,13 @@ static int cat_video(const std::string& path) {
     double fps = 24.0;
     long long frame_ms = (long long)(1000.0 / fps);
 
-    char cmd[2048];
-    snprintf(cmd, sizeof(cmd),
-        "ffmpeg -hide_banner -loglevel quiet -i \"%s\""
-        " -vf fps=%.3f,scale=%d:%d -f rawvideo -pix_fmt rgb24 -",
-        path.c_str(), fps, frame_w, frame_h);
+    wchar_t cmd[2048];
+    swprintf(cmd, 2048,
+        L"ffmpeg -hide_banner -loglevel quiet -i \"%ls\""
+        L" -vf fps=%.3f,scale=%d:%d -f rawvideo -pix_fmt rgb24 -",
+        wpath.c_str(), fps, frame_w, frame_h);
 
-    FILE* pipe = _popen(cmd, "rb");
+    FILE* pipe = _wpopen(cmd, L"rb");
     if (!pipe) { out("cat: failed to open video pipe\r\n"); return 1; }
 
     size_t frame_bytes = (size_t)frame_w * frame_h * 3;

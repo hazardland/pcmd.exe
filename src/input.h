@@ -17,7 +17,7 @@ struct input {
     int hist_idx  = -1;         // -1 = edit mode; >= 0 = index into hist during UP/DOWN navigation
     std::wstring saved;         // prefix filter for navigation (buf at UP time, or empty for plain nav)
     std::wstring draft;         // uncommitted buf snapshot taken when UP is first pressed; restored on DOWN to floor
-    bool plain_nav = false;     // set true after accepting a hint with →/End so the next UP ignores buf as filter
+    bool plain_nav = false;     // set true after accepting a hint with ?/End so the next UP ignores buf as filter
     std::wstring hint;          // gray ghost suffix after cursor; in nav mode it holds the suffix of the matching history entry
 
     bool tab_on = false;                    // true while Tab is being cycled; any non-Tab key resets this
@@ -154,8 +154,8 @@ void find_hint(input& e) {
             e.hint = matches[0].substr(token.size());
         return;
     }
-    if (lower.size() >= 4 && (lower.substr(0, 4) == L"mp3 " || lower.substr(0, 5) == L"play ")) {
-        int cmd_len = (lower.size() >= 5 && lower.substr(0, 5) == L"play ") ? 5 : 4;
+    if (lower.size() >= 5 && lower.substr(0, 5) == L"play ") {
+        int cmd_len = 5;
         std::wstring token = e.buf.substr(cmd_len);
         std::wstring token_lower = token;
         std::transform(token_lower.begin(), token_lower.end(), token_lower.begin(), ::towlower);
@@ -303,7 +303,7 @@ void redraw(input& e) {
         }
     }
 
-    // Gray hint — only shown in single-line mode to avoid complexity
+    // Gray hint � only shown in single-line mode to avoid complexity
     if (!e.hint.empty() && e.buf.find(L'\n') == std::wstring::npos) {
         int end_col   = phys_col(e.buf, (int)e.buf.size(), e.prompt_vis, width);
         int remaining = width - end_col;
@@ -405,7 +405,7 @@ static void nav_step(input& e, int dir) {
     int n = (int)e.hist.size();
     if (n == 0) return;
 
-    if (dir == -1) {  // UP → older
+    if (dir == -1) {  // UP ? older
         if (e.hist_idx == 0) return;
         int start = (e.hist_idx == n) ? n - 1 : e.hist_idx - 1;
         if (e.saved.empty()) {
@@ -425,7 +425,7 @@ static void nav_step(input& e, int dir) {
                 e.hint = e.hist[found].substr(e.saved.size());
             }
         }
-    } else {  // DOWN → newer
+    } else {  // DOWN ? newer
         int start = e.hist_idx + 1;
         auto restore_draft = [&]() {
             e.buf = e.draft; e.hint.clear();
@@ -666,14 +666,14 @@ std::string readline(input& e) {
                 std::wstring token = before.substr(start);
                 bool dirs_only = (lower_buf.substr(0, 3) == L"cd " || lower_buf == L"cd" ||
                                   lower_buf.substr(0, 3) == L"ls " || lower_buf == L"ls");
-                if (lower_buf.substr(0, 4) == L"mp3 " || lower_buf.substr(0, 5) == L"play ") {
-                    int cmd_len = (lower_buf.substr(0, 5) == L"play ") ? 5 : 4;
-                    std::wstring mp3_arg = before.substr(cmd_len);
-                    std::wstring mp3_lower = mp3_arg;
-                    std::transform(mp3_lower.begin(), mp3_lower.end(), mp3_lower.begin(), ::towlower);
-                    if (mp3_lower == L"pause" || mp3_lower == L"resume" || mp3_lower == L"stop" ||
-                        mp3_lower == L"status" || mp3_lower == L"ui" ||
-                        mp3_lower.substr(0, 4) == L"vol ")
+                if (lower_buf.substr(0, 5) == L"play ") {
+                    int cmd_len = 5;
+                    std::wstring play_arg = before.substr(cmd_len);
+                    std::wstring play_lower = play_arg;
+                    std::transform(play_lower.begin(), play_lower.end(), play_lower.begin(), ::towlower);
+                    if (play_lower == L"pause" || play_lower == L"resume" || play_lower == L"stop" ||
+                        play_lower == L"status" || play_lower == L"ui" ||
+                        play_lower.substr(0, 4) == L"vol ")
                         continue;
                 }
                 if (yt_path_token(before, start, token))
@@ -739,7 +739,7 @@ std::string readline(input& e) {
         }
 
         if ((ctrl && vk == 'O') || vk == VK_F10) {
-            zex_toggle();
+            explore_toggle();
             e.tab_on = false;
             find_hint(e);
             refresh_prompt(e);
@@ -774,3 +774,4 @@ std::string readline(input& e) {
     }
     return "";
 }
+

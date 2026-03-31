@@ -73,6 +73,23 @@ static const char* name_col(const std::string& n) {
     return BLUE;
 }
 
+static std::string top_filter_tail(const std::string& value, int width, int cursor, int& start_out) {
+    if (width <= 0) {
+        start_out = 0;
+        return "";
+    }
+    int size = (int)value.size();
+    if (cursor < 0) cursor = 0;
+    if (cursor > size) cursor = size;
+    start_out = 0;
+    if (size <= width)
+        return value;
+    start_out = std::max(0, cursor - width + 1);
+    if (start_out + width > size)
+        start_out = std::max(0, size - width);
+    return value.substr(start_out, width);
+}
+
 static void top_cmd() {
     SYSTEM_INFO si; GetSystemInfo(&si);
     int ncpu = (int)si.dwNumberOfProcessors;
@@ -86,6 +103,7 @@ static void top_cmd() {
     int  scroll_top = 0;
     bool fmode      = false;
     std::string fstr;
+    int  fcur       = 0;
     bool needs_clear      = true;
     bool prev_show_filter = false;
     bool kill_pending     = false;
@@ -241,7 +259,26 @@ static void top_cmd() {
         if (show_filter) {
             std::string line="  "+std::string(GRAY)+"[";
             if (fmode) {
-                line+=YELLOW+fstr+"_\x1b[39m";
+                int inner_w = std::max(1, cols - 5);
+                int start = 0;
+                std::string visible = top_filter_tail(fstr, inner_w, fcur, start);
+                int cursor_pos = std::max(0, std::min(fcur - start, inner_w - 1));
+                std::string cursor_ch = " ";
+                int tail_start = cursor_pos;
+                if (fcur >= start && fcur < start + (int)visible.size())
+                    cursor_ch = std::string(1, visible[fcur - start]);
+                else
+                    tail_start = std::min(cursor_pos, (int)visible.size());
+                std::string rebuilt = "  " + std::string(GRAY) + "[";
+                rebuilt += YELLOW;
+                if (cursor_pos > 0)
+                    rebuilt += visible.substr(0, std::min(cursor_pos, (int)visible.size()));
+                rebuilt += "\x1b[48;5;111m\x1b[30m" + cursor_ch + RESET;
+                rebuilt += YELLOW;
+                if (tail_start < (int)visible.size())
+                    rebuilt += visible.substr(tail_start + (cursor_ch == " " ? 0 : 1));
+                rebuilt += "\x1b[39m";
+                line = rebuilt;
             } else {
                 line+=YELLOW+fstr+"\x1b[39m";
             }
@@ -353,10 +390,15 @@ static void top_cmd() {
 
                     // Filter input mode
                     if (fmode) {
-                        if (vk==VK_ESCAPE)         { fmode=false; fstr.clear(); sel=0; scroll_top=0; }
-                        else if (vk==VK_BACK)       { if (!fstr.empty()) fstr.pop_back(); sel=0; scroll_top=0; }
-                        else if (vk==VK_RETURN)     { fmode=false; }
-                        else if (wch>=32&&wch<127)  { fstr+=(char)wch; sel=0; scroll_top=0; }
+                        if (vk==VK_ESCAPE)         { fmode=false; fstr.clear(); fcur=0; sel=0; scroll_top=0; }
+                        else if (vk==VK_BACK)      { if (fcur>0 && !fstr.empty()) { fstr.erase(fcur-1,1); fcur--; } sel=0; scroll_top=0; }
+                        else if (vk==VK_DELETE)    { if (fcur<(int)fstr.size()) fstr.erase(fcur,1); sel=0; scroll_top=0; }
+                        else if (vk==VK_LEFT)      { if (fcur>0) fcur--; }
+                        else if (vk==VK_RIGHT)     { if (fcur<(int)fstr.size()) fcur++; }
+                        else if (vk==VK_HOME)      { fcur=0; }
+                        else if (vk==VK_END)       { fcur=(int)fstr.size(); }
+                        else if (vk==VK_RETURN)    { fmode=false; }
+                        else if (wch>=32&&wch<127) { fstr.insert(fcur, 1, (char)wch); fcur++; sel=0; scroll_top=0; }
                         redraw=true; continue;
                     }
 
@@ -374,7 +416,7 @@ static void top_cmd() {
                     if (ch=='q'||vk==VK_ESCAPE) goto done;
                     if (ch=='m') { sort_by='m'; redraw=true; }
                     if (ch=='c') { sort_by='c'; redraw=true; }
-                    if (ch=='/'||ch=='f') { fmode=true; fstr.clear(); sel=0; scroll_top=0; redraw=true; }
+                    if (ch=='/'||ch=='f') { fmode=true; fstr.clear(); fcur=0; sel=0; scroll_top=0; redraw=true; }
 
                     if (vk==VK_UP)    { if (sel>0) sel--; redraw=true; }
                     if (vk==VK_DOWN)  { if (sel<(int)filtered.size()-1) sel++; redraw=true; }

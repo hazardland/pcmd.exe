@@ -366,7 +366,7 @@ int run_bash(const std::string& line) {
 int which(const std::string& arg) {
     std::string argl = arg;
     std::transform(argl.begin(), argl.end(), argl.begin(), ::tolower);
-    static const std::vector<std::string> builtins = {"ls","cd","pwd","cat","exit","which","help","version","alias","unalias","mp3","play","yt"};
+    static const std::vector<std::string> builtins = {"ls","cd","pwd","cat","exit","which","help","version","alias","unalias","play","resmon","yt"};
     for (auto& b : builtins) {
         if (argl == b) { out(arg + ": zcmd built-in\r\n"); return 0; }
     }
