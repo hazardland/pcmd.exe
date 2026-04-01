@@ -116,6 +116,7 @@ int main() {
         e.prompt_vis  = p.vis;
         e.prev_pos    = 0;
         e.cursor_row  = 0;
+        reset_hint_cache(e);
         out(p.str);
 
         std::string line = readline(e);

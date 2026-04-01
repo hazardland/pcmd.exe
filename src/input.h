@@ -28,6 +28,11 @@ struct input {
     std::wstring tab_suf;                   // buf content after cursor at Tab-press time; reappended each cycle
 
     std::wstring pending_save;              // history entry waiting to be written to disk after execution result is known
+
+    std::wstring hint_cwd;                  // cwd used for cached filesystem hint matches
+    std::wstring hint_dir;                  // directory prefix for cached filesystem hint matches
+    bool hint_dirs_only = false;            // completion mode used for cached filesystem hint matches
+    std::vector<std::wstring> hint_matches; // cached entries for the current hint directory
 };
 
 static void refresh_prompt(input& e) {
@@ -114,6 +119,49 @@ static bool yt_path_token(const std::wstring& s, int& start, std::wstring& token
     return false;
 }
 
+static void reset_hint_cache(input& e) {
+    e.hint_cwd.clear();
+    e.hint_dir.clear();
+    e.hint_dirs_only = false;
+    e.hint_matches.clear();
+}
+
+static bool hint_starts_with_ci(const std::wstring& text, const std::wstring& prefix) {
+    if (prefix.size() > text.size()) return false;
+    for (size_t i = 0; i < prefix.size(); i++)
+        if (::towlower(text[i]) != ::towlower(prefix[i])) return false;
+    return true;
+}
+
+static std::vector<std::wstring> complete_cached(input& e, const std::wstring& prefix, bool dirs_only = false) {
+    std::wstring dir, name;
+    size_t sep = prefix.find_last_of(L"\\/");
+    if (sep == std::wstring::npos) { dir = L""; name = prefix; }
+    else { dir = prefix.substr(0, sep + 1); name = prefix.substr(sep + 1); }
+
+    std::wstring cur = to_wide(cwd());
+    std::replace(cur.begin(), cur.end(), L'\\', L'/');
+
+    if (e.hint_cwd != cur || e.hint_dir != dir || e.hint_dirs_only != dirs_only) {
+        e.hint_matches = complete(dir, dirs_only);
+        e.hint_cwd = cur;
+        e.hint_dir = dir;
+        e.hint_dirs_only = dirs_only;
+    }
+
+    if (name.empty()) return e.hint_matches;
+
+    std::vector<std::wstring> out;
+    out.reserve(e.hint_matches.size());
+    for (const auto& full : e.hint_matches) {
+        if (full.size() < dir.size()) continue;
+        std::wstring tail = full.substr(dir.size());
+        if (hint_starts_with_ci(tail, name))
+            out.push_back(full);
+    }
+    return out;
+}
+
 // Calculates the ghost hint for the current buf in edit mode (hist_idx == -1).
 // For "cd <path>" uses filesystem completions (dirs only); for "ls <path>" files+dirs;
 // for bare paths (X:/, ./, ../) uses filesystem completions directly;
@@ -127,7 +175,7 @@ void find_hint(input& e) {
     if (lower == L"cd" || (lower.size() >= 3 && lower.substr(0, 3) == L"cd ")) {
         if (lower.size() >= 3) {
             std::wstring token = e.buf.substr(3);
-            auto matches = complete(token, true);
+            auto matches = complete_cached(e, token, true);
             if (!matches.empty() && matches[0].size() > token.size())
                 e.hint = matches[0].substr(token.size());
         }
@@ -135,21 +183,21 @@ void find_hint(input& e) {
     }
     if (lower.size() >= 3 && lower.substr(0, 3) == L"ls ") {
         std::wstring token = e.buf.substr(3);
-        auto matches = complete(token, true);
+        auto matches = complete_cached(e, token, true);
         if (!matches.empty() && matches[0].size() > token.size())
             e.hint = matches[0].substr(token.size());
         return;
     }
     if (lower.size() >= 4 && lower.substr(0, 4) == L"cat ") {
         std::wstring token = e.buf.substr(4);
-        auto matches = complete(token, false);
+        auto matches = complete_cached(e, token, false);
         if (!matches.empty() && matches[0].size() > token.size())
             e.hint = matches[0].substr(token.size());
         return;
     }
     if (lower.size() >= 5 && lower.substr(0, 5) == L"edit ") {
         std::wstring token = e.buf.substr(5);
-        auto matches = complete(token, false);
+        auto matches = complete_cached(e, token, false);
         if (!matches.empty() && matches[0].size() > token.size())
             e.hint = matches[0].substr(token.size());
         return;
@@ -164,21 +212,21 @@ void find_hint(input& e) {
             token_lower.substr(0, 4) == L"vol ") {
             return;
         }
-        auto matches = complete(token, false);
+        auto matches = complete_cached(e, token, false);
         if (!matches.empty() && matches[0].size() > token.size())
             e.hint = matches[0].substr(token.size());
         return;
     }
     if (lower.size() >= 5 && lower.substr(0, 5) == L"json ") {
         std::wstring token = e.buf.substr(5);
-        auto matches = complete(token, false);
+        auto matches = complete_cached(e, token, false);
         if (!matches.empty() && matches[0].size() > token.size())
             e.hint = matches[0].substr(token.size());
         return;
     }
     if (lower.size() >= 5 && lower.substr(0, 5) == L"clip ") {
         std::wstring token = e.buf.substr(5);
-        auto matches = complete(token, false);
+        auto matches = complete_cached(e, token, false);
         if (!matches.empty() && matches[0].size() > token.size())
             e.hint = matches[0].substr(token.size());
         return;
@@ -187,7 +235,7 @@ void find_hint(input& e) {
         int start = 0;
         std::wstring token;
         if (yt_path_token(e.buf, start, token)) {
-            auto matches = complete(token, true);
+            auto matches = complete_cached(e, token, true);
             if (!matches.empty() && matches[0].size() > token.size())
                 e.hint = matches[0].substr(token.size());
             return;
@@ -198,7 +246,7 @@ void find_hint(input& e) {
                    (e.buf.size() >= 2 && e.buf[0] == L'.' && e.buf[1] == L'/') ||
                    (e.buf.size() >= 3 && e.buf[0] == L'.' && e.buf[1] == L'.' && e.buf[2] == L'/');
     if (is_path) {
-        auto matches = complete(e.buf, false);
+        auto matches = complete_cached(e, e.buf, false);
         if (!matches.empty() && matches[0].size() > e.buf.size())
             e.hint = matches[0].substr(e.buf.size());
         return;
@@ -560,9 +608,27 @@ std::string readline(input& e) {
 
         if (vk == VK_BACK) {
             if (e.pos > 0) {
-                if (e.hist_idx != -1 && !e.hint.empty()) { e.buf += e.hint; }
+                std::wstring old_buf = e.buf;
+                std::wstring old_hint = e.hint;
+                bool used_hist_hint = (e.hist_idx != -1 && !e.hint.empty());
+                if (used_hist_hint) { e.buf += e.hint; }
+                bool backspace_at_end = (e.pos == (int)e.buf.size());
                 e.hist_idx = -1; e.plain_nav = false;
-                e.buf.erase(e.pos - 1, 1); e.pos--; find_hint(e); redraw(e);
+                e.buf.erase(e.pos - 1, 1); e.pos--;
+                bool reuse_hint = !used_hist_hint &&
+                                  backspace_at_end &&
+                                  old_buf.find(L'\n') == std::wstring::npos &&
+                                  !old_hint.empty();
+                if (reuse_hint) {
+                    std::wstring old_full = old_buf + old_hint;
+                    if (old_full.size() > e.buf.size() && old_full.substr(0, e.buf.size()) == e.buf)
+                        e.hint = old_full.substr(e.buf.size());
+                    else
+                        find_hint(e);
+                } else {
+                    find_hint(e);
+                }
+                redraw(e);
             }
             continue;
         }
@@ -741,6 +807,7 @@ std::string readline(input& e) {
         if ((ctrl && vk == 'O') || vk == VK_F10) {
             explore_toggle();
             e.tab_on = false;
+            reset_hint_cache(e);
             find_hint(e);
             refresh_prompt(e);
             redraw(e);

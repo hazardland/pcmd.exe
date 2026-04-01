@@ -23,3 +23,6 @@
   Moved cursor to git checkout [here]codex_tests
   And typed git checkout -Bdex-tests - so it overrited
 
+
+# Do hits always reread folders and collect data every time I type something? If yes can we set a cooldown on it? While path is not changed or while new command is not run
+

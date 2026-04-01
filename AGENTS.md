@@ -59,10 +59,12 @@
 - For a normal release request, do not commit, merge, tag, or push unless the user explicitly asks for that as a separate step.
 - Use release tags in `v0.0.X` format and release titles in `zcmd v0.0.X` format.
 - Always attach `zcmd.exe` as the GitHub release asset.
+- For a normal release request, include short release notes that summarize what changed in that version, not just the version number.
+- If the user does not provide release notes, infer a concise high-signal summary from the recent completed work.
 - Default release flow:
   Read `version.txt`
   Release `.\zcmd.exe` as `v0.0.X`
-  Example: `gh release create v0.0.X .\zcmd.exe --title "zcmd v0.0.X" --notes "Release v0.0.X"`
+  Example: `gh release create v0.0.X .\zcmd.exe --title "zcmd v0.0.X" --notes "Highlights: ..."`
 - If the asset needs to be replaced on an existing release, use:
   `gh release upload v0.0.X .\zcmd.exe --clobber`
 - Commit, push, branch cleanup, and tag/source alignment are separate follow-up tasks and should not be done as part of a normal release request unless explicitly requested.
