@@ -27,3 +27,35 @@ int term_height() {
         return csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
     return 24;
 }
+
+static double term_cell_width_setting() {
+    // Temporary hardcoded Windows Terminal profile value until we add a real
+    // Zcmd-side setting / calibration flow.
+    return 0.60;
+}
+
+static double term_line_height_setting() {
+    // Temporary hardcoded Windows Terminal profile value.
+    return 1.00;
+}
+
+static double term_cell_aspect() {
+    double cell_width = term_cell_width_setting();
+    double line_height = term_line_height_setting();
+    if (cell_width <= 0.0) cell_width = 0.60;
+    if (line_height <= 0.0) line_height = 1.00;
+    return cell_width / line_height;
+}
+
+static double term_sixel_width_scale() {
+    double cell_width = term_cell_width_setting();
+    double line_height = term_line_height_setting();
+    if (cell_width <= 0.0) cell_width = 0.60;
+    if (line_height <= 0.0) line_height = 1.00;
+
+    // Calibrated neutral baseline for Windows Terminal SIXEL output.
+    double scale = (0.52 * line_height) / cell_width;
+    if (scale < 0.25) scale = 0.25;
+    if (scale > 2.0) scale = 2.0;
+    return scale;
+}

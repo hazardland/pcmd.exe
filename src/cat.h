@@ -90,11 +90,14 @@ static int cat_image(const std::string& path) {
     }
     --term_h;
 
+    double cell_aspect = term_cell_aspect();
+    if (cell_aspect <= 0.0) cell_aspect = 0.60;
+
     int out_w = term_w;
-    int out_h2 = (int)((double)img_h / img_w * out_w / 2.0 + 0.5);
+    int out_h2 = (int)((double)img_h / img_w * out_w * cell_aspect + 0.5);
     if (out_h2 > term_h) {
         out_h2 = term_h;
-        out_w = (int)((double)img_w / img_h * out_h2 * 2.0 + 0.5);
+        out_w = (int)((double)img_w / img_h * out_h2 / cell_aspect + 0.5);
     }
     if (out_w < 1) out_w = 1;
     if (out_h2 < 1) out_h2 = 1;
@@ -158,11 +161,14 @@ static int cat_video(const std::string& path) {
     }
     --th;
 
+    double cell_aspect = term_cell_aspect();
+    if (cell_aspect <= 0.0) cell_aspect = 0.60;
+
     int out_w = tw;
-    int out_h2 = (int)((double)vid_h / vid_w * out_w / 2.0 + 0.5);
+    int out_h2 = (int)((double)vid_h / vid_w * out_w * cell_aspect + 0.5);
     if (out_h2 > th) {
         out_h2 = th;
-        out_w = (int)((double)vid_w / vid_h * out_h2 * 2.0 + 0.5);
+        out_w = (int)((double)vid_w / vid_h * out_h2 / cell_aspect + 0.5);
     }
     if (out_w < 1) out_w = 1;
     if (out_h2 < 1) out_h2 = 1;

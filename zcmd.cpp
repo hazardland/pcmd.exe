@@ -190,6 +190,7 @@ int main() {
                 "        Image files (jpg png bmp gif) rendered inline as 24-bit color block art\r\n"
                 "        Video files (mp4 mkv avi mov webm) played inline  Esc/Ctrl+C to stop  requires ffmpeg\r\n"
                 GREEN "img" RESET "     Render image with SIXEL  img path/to/file\r\n"
+                GREEN "vid" RESET "     Play video with SIXEL  vid path/to/file  Esc/Ctrl+C to stop  requires ffmpeg\r\n"
                 GREEN "edit" RESET "    Edit a file  edit path/to/file\r\n"
                 GREEN "terminfo" RESET " Print terminal columns and rows\r\n"
                 GREEN "matrix" RESET "   Matrix digital rain screensaver  any key to exit\r\n"
@@ -271,6 +272,11 @@ int main() {
 
         if (lower == "play" || (lower.size() >= 5 && lower.substr(0, 5) == "play ")) {
             last_code = play_cmd(line);
+            continue;
+        }
+
+        if (lower == "vid" || (lower.size() >= 4 && lower.substr(0, 4) == "vid ")) {
+            last_code = vid_cmd(line);
             continue;
         }
 

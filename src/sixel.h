@@ -18,6 +18,13 @@ struct SixelFit {
     int pixel_h;
 };
 
+struct SixelRenderOptions {
+    int colors;
+    bool dither;
+    bool home;
+    int palette_interval;
+};
+
 struct SixelColor {
     uint8_t r;
     uint8_t g;
@@ -44,12 +51,27 @@ struct SixelBox {
 };
 
 struct SixelScratch {
+    std::vector<uint32_t> hist_count;
+    std::vector<uint32_t> hist_rsum;
+    std::vector<uint32_t> hist_gsum;
+    std::vector<uint32_t> hist_bsum;
+    std::vector<int> hist_used_bins;
+    std::vector<SixelHistColor> hist_colors;
+    std::vector<SixelBox> hist_boxes;
+    std::vector<SixelColor> cached_palette;
+    int cached_palette_colors = 0;
+    int cached_palette_interval = 0;
+    int cached_palette_frames_left = 0;
     std::vector<uint8_t> pixels;
     std::vector<uint8_t> used;
-    std::vector<float> work;
+    std::vector<uint16_t> lut;
+    std::vector<float> err_curr;
+    std::vector<float> err_next;
     std::vector<char> line;
     std::vector<uint8_t> band_used;
     std::vector<int> band_colors;
+    std::vector<uint8_t> band_masks;
+    std::vector<int> touched_slots;
     std::string buf;
 };
 
@@ -105,33 +127,46 @@ static int sixel_box_score(const SixelBox& box) {
     return span * std::max(1, box.count);
 }
 
-static std::vector<SixelColor> sixel_build_palette(const SixelFrame& frame, int target_colors) {
+static std::vector<SixelColor> sixel_build_palette(const SixelFrame& frame, int target_colors, SixelScratch& scratch) {
     const int hist_size = 32 * 32 * 32;
-    std::vector<uint32_t> count(hist_size, 0);
-    std::vector<uint32_t> rsum(hist_size, 0);
-    std::vector<uint32_t> gsum(hist_size, 0);
-    std::vector<uint32_t> bsum(hist_size, 0);
+    if ((int)scratch.hist_count.size() != hist_size) {
+        scratch.hist_count.assign(hist_size, 0);
+        scratch.hist_rsum.assign(hist_size, 0);
+        scratch.hist_gsum.assign(hist_size, 0);
+        scratch.hist_bsum.assign(hist_size, 0);
+    } else {
+        for (int idx : scratch.hist_used_bins) {
+            scratch.hist_count[idx] = 0;
+            scratch.hist_rsum[idx] = 0;
+            scratch.hist_gsum[idx] = 0;
+            scratch.hist_bsum[idx] = 0;
+        }
+    }
+    scratch.hist_used_bins.clear();
 
     for (int y = 0; y < frame.height; ++y) {
         for (int x = 0; x < frame.width; ++x) {
             const uint8_t* src = frame.rgb + ((size_t)y * frame.width + x) * 3;
             int idx = ((src[0] >> 3) << 10) | ((src[1] >> 3) << 5) | (src[2] >> 3);
-            ++count[idx];
-            rsum[idx] += src[0];
-            gsum[idx] += src[1];
-            bsum[idx] += src[2];
+            if (!scratch.hist_count[idx])
+                scratch.hist_used_bins.push_back(idx);
+            ++scratch.hist_count[idx];
+            scratch.hist_rsum[idx] += src[0];
+            scratch.hist_gsum[idx] += src[1];
+            scratch.hist_bsum[idx] += src[2];
         }
     }
 
-    std::vector<SixelHistColor> colors;
-    colors.reserve(hist_size);
-    for (int i = 0; i < hist_size; ++i) {
-        if (!count[i]) continue;
+    std::vector<SixelHistColor>& colors = scratch.hist_colors;
+    colors.clear();
+    colors.reserve(scratch.hist_used_bins.size());
+    for (int idx : scratch.hist_used_bins) {
+        uint32_t count = scratch.hist_count[idx];
         colors.push_back({
-            (uint8_t)(rsum[i] / count[i]),
-            (uint8_t)(gsum[i] / count[i]),
-            (uint8_t)(bsum[i] / count[i]),
-            (int)count[i]
+            (uint8_t)(scratch.hist_rsum[idx] / count),
+            (uint8_t)(scratch.hist_gsum[idx] / count),
+            (uint8_t)(scratch.hist_bsum[idx] / count),
+            (int)count
         });
     }
 
@@ -146,7 +181,8 @@ static std::vector<SixelColor> sixel_build_palette(const SixelFrame& frame, int 
         return palette;
     }
 
-    std::vector<SixelBox> boxes;
+    std::vector<SixelBox>& boxes = scratch.hist_boxes;
+    boxes.clear();
     boxes.push_back({ 0, (int)colors.size(), 0, 0, 0, 0, 0, 0, 0 });
     sixel_box_update(boxes[0], colors);
 
@@ -240,20 +276,19 @@ static uint8_t sixel_nearest_color(float r, float g, float b, const std::vector<
     return (uint8_t)best;
 }
 
-static std::vector<uint8_t> sixel_build_lookup(const std::vector<SixelColor>& palette) {
-    const int dim = 32;
-    std::vector<uint8_t> lut((size_t)dim * dim * dim);
-    for (int r = 0; r < dim; ++r) {
-        for (int g = 0; g < dim; ++g) {
-            for (int b = 0; b < dim; ++b) {
-                float rr = (float)(r * 255) / (dim - 1);
-                float gg = (float)(g * 255) / (dim - 1);
-                float bb = (float)(b * 255) / (dim - 1);
-                lut[(r << 10) | (g << 5) | b] = sixel_nearest_color(rr, gg, bb, palette);
-            }
-        }
+static uint8_t sixel_lookup_color(uint8_t r, uint8_t g, uint8_t b, const std::vector<SixelColor>& palette, std::vector<uint16_t>& lut) {
+    int ri = r >> 3;
+    int gi = g >> 3;
+    int bi = b >> 3;
+    size_t key = (size_t)(ri << 10) | (size_t)(gi << 5) | (size_t)bi;
+    uint16_t& cached = lut[key];
+    if (cached == 0xFFFF) {
+        float rr = (float)(ri * 255) / 31.0f;
+        float gg = (float)(gi * 255) / 31.0f;
+        float bb = (float)(bi * 255) / 31.0f;
+        cached = sixel_nearest_color(rr, gg, bb, palette);
     }
-    return lut;
+    return (uint8_t)cached;
 }
 
 static bool sixel_supported() {
@@ -280,6 +315,10 @@ static bool sixel_supported() {
     return false;
 }
 
+static double sixel_width_scale() {
+    return term_sixel_width_scale();
+}
+
 static SixelFit sixel_fit(int src_w, int src_h, int reserve_rows = 1) {
     SixelFit fit = {};
     fit.term_w = term_width();
@@ -304,12 +343,13 @@ static SixelFit sixel_fit(int src_w, int src_h, int reserve_rows = 1) {
     if (max_pixel_w < 1) max_pixel_w = 1;
     if (max_pixel_h < 1) max_pixel_h = 1;
 
-    double scale_x = (double)max_pixel_w / src_w;
+    double width_scale = sixel_width_scale();
+    double scale_x = (double)max_pixel_w / (src_w * width_scale);
     double scale_y = (double)max_pixel_h / src_h;
     double scale = std::min(1.0, std::min(scale_x, scale_y));
     if (scale <= 0.0) scale = 1.0;
 
-    fit.pixel_w = (int)(src_w * scale + 0.5);
+    fit.pixel_w = (int)(src_w * scale * width_scale + 0.5);
     fit.pixel_h = (int)(src_h * scale + 0.5);
     if (fit.pixel_w < 1) fit.pixel_w = 1;
     if (fit.pixel_h < 1) fit.pixel_h = 1;
@@ -319,59 +359,96 @@ static SixelFit sixel_fit(int src_w, int src_h, int reserve_rows = 1) {
     return fit;
 }
 
-static int sixel_render(const SixelFrame& frame, const SixelFit& fit, bool home = false) {
+static int sixel_render(const SixelFrame& frame, const SixelFit& fit, const SixelRenderOptions& opts) {
     (void)fit;
     if (!sixel_supported()) return 1;
     if (!frame.rgb || frame.width < 1 || frame.height < 1) return 1;
 
     static thread_local SixelScratch scratch;
-    std::vector<SixelColor> palette = sixel_build_palette(frame, 256);
-    std::vector<uint8_t> lut = sixel_build_lookup(palette);
+    int target_colors = opts.colors;
+    if (target_colors < 2) target_colors = 2;
+    if (target_colors > 256) target_colors = 256;
+    int palette_interval = opts.palette_interval;
+    if (palette_interval < 1) palette_interval = 1;
+
+    bool rebuild_palette =
+        scratch.cached_palette.empty() ||
+        scratch.cached_palette_colors != target_colors ||
+        scratch.cached_palette_interval != palette_interval ||
+        scratch.cached_palette_frames_left <= 0;
+
+    if (rebuild_palette) {
+        scratch.cached_palette = sixel_build_palette(frame, target_colors, scratch);
+        scratch.cached_palette_colors = target_colors;
+        scratch.cached_palette_interval = palette_interval;
+        scratch.cached_palette_frames_left = palette_interval - 1;
+    } else {
+        --scratch.cached_palette_frames_left;
+    }
+
+    const std::vector<SixelColor>& palette = scratch.cached_palette;
     const int palette_size = (int)palette.size();
     size_t pixel_count = (size_t)frame.width * frame.height;
     scratch.pixels.resize(pixel_count);
     scratch.used.assign((size_t)palette_size, 0);
-    scratch.work.resize(pixel_count * 3);
-    for (size_t i = 0; i < scratch.work.size(); ++i)
-        scratch.work[i] = frame.rgb[i];
+    scratch.lut.assign(32 * 32 * 32, 0xFFFF);
 
     std::vector<uint8_t>& pixels = scratch.pixels;
     std::vector<uint8_t>& used = scratch.used;
-    std::vector<float>& work = scratch.work;
+    std::vector<uint16_t>& lut = scratch.lut;
+    if (opts.dither) {
+        scratch.err_curr.assign((size_t)(frame.width + 2) * 3, 0.0f);
+        scratch.err_next.assign((size_t)(frame.width + 2) * 3, 0.0f);
+        std::vector<float>& err_curr = scratch.err_curr;
+        std::vector<float>& err_next = scratch.err_next;
 
-    for (int y = 0; y < frame.height; ++y) {
-        for (int x = 0; x < frame.width; ++x) {
-            size_t pos = ((size_t)y * frame.width + x);
-            size_t off = pos * 3;
-            float r = sixel_clamp_u8(work[off + 0]);
-            float g = sixel_clamp_u8(work[off + 1]);
-            float b = sixel_clamp_u8(work[off + 2]);
-            work[off + 0] = r;
-            work[off + 1] = g;
-            work[off + 2] = b;
-            int ri = (int)r >> 3;
-            int gi = (int)g >> 3;
-            int bi = (int)b >> 3;
-            uint8_t idx = lut[(ri << 10) | (gi << 5) | bi];
-            pixels[pos] = idx;
-            used[idx] = 1;
+        for (int y = 0; y < frame.height; ++y) {
+            if (y > 0) {
+                err_curr.swap(err_next);
+                std::fill(err_next.begin(), err_next.end(), 0.0f);
+            }
+            const uint8_t* src_row = frame.rgb + (size_t)y * frame.width * 3;
+            for (int x = 0; x < frame.width; ++x) {
+                size_t pos = ((size_t)y * frame.width + x);
+                size_t src_off = (size_t)x * 3;
+                size_t err_off = (size_t)(x + 1) * 3;
+                float r = (float)sixel_clamp_u8((float)src_row[src_off + 0] + err_curr[err_off + 0]);
+                float g = (float)sixel_clamp_u8((float)src_row[src_off + 1] + err_curr[err_off + 1]);
+                float b = (float)sixel_clamp_u8((float)src_row[src_off + 2] + err_curr[err_off + 2]);
+                uint8_t idx = sixel_lookup_color((uint8_t)r, (uint8_t)g, (uint8_t)b, palette, lut);
+                pixels[pos] = idx;
+                used[idx] = 1;
 
-            float er = r - palette[idx].r;
-            float eg = g - palette[idx].g;
-            float eb = b - palette[idx].b;
+                float er = r - palette[idx].r;
+                float eg = g - palette[idx].g;
+                float eb = b - palette[idx].b;
+                err_curr[err_off + 3 + 0] += er * (7.0f / 16.0f);
+                err_curr[err_off + 3 + 1] += eg * (7.0f / 16.0f);
+                err_curr[err_off + 3 + 2] += eb * (7.0f / 16.0f);
 
-            auto diffuse = [&](int nx, int ny, float factor) {
-                if (nx < 0 || nx >= frame.width || ny < 0 || ny >= frame.height) return;
-                size_t noff = (((size_t)ny * frame.width + nx) * 3);
-                work[noff + 0] += er * factor;
-                work[noff + 1] += eg * factor;
-                work[noff + 2] += eb * factor;
-            };
+                err_next[err_off - 3 + 0] += er * (3.0f / 16.0f);
+                err_next[err_off - 3 + 1] += eg * (3.0f / 16.0f);
+                err_next[err_off - 3 + 2] += eb * (3.0f / 16.0f);
 
-            diffuse(x + 1, y    , 7.0f / 16.0f);
-            diffuse(x - 1, y + 1, 3.0f / 16.0f);
-            diffuse(x    , y + 1, 5.0f / 16.0f);
-            diffuse(x + 1, y + 1, 1.0f / 16.0f);
+                err_next[err_off + 0] += er * (5.0f / 16.0f);
+                err_next[err_off + 1] += eg * (5.0f / 16.0f);
+                err_next[err_off + 2] += eb * (5.0f / 16.0f);
+
+                err_next[err_off + 3 + 0] += er * (1.0f / 16.0f);
+                err_next[err_off + 3 + 1] += eg * (1.0f / 16.0f);
+                err_next[err_off + 3 + 2] += eb * (1.0f / 16.0f);
+            }
+        }
+    } else {
+        for (int y = 0; y < frame.height; ++y) {
+            const uint8_t* src_row = frame.rgb + (size_t)y * frame.width * 3;
+            for (int x = 0; x < frame.width; ++x) {
+                size_t pos = ((size_t)y * frame.width + x);
+                size_t src_off = (size_t)x * 3;
+                uint8_t idx = sixel_lookup_color(src_row[src_off + 0], src_row[src_off + 1], src_row[src_off + 2], palette, lut);
+                pixels[pos] = idx;
+                used[idx] = 1;
+            }
         }
     }
 
@@ -379,8 +456,8 @@ static int sixel_render(const SixelFrame& frame, const SixelFit& fit, bool home 
     scratch.buf.reserve((size_t)frame.width * frame.height * 2 + palette_size * 24 + 1024);
     std::string& buf = scratch.buf;
 
-    if (home) buf += "\033[H";
-    buf += "\033Pq";
+    if (opts.home) buf += "\033[H";
+    buf += "\033P7;1q";
     buf += "\"1;1;";
     sixel_push_num(buf, frame.width);
     buf += ';';
@@ -402,18 +479,50 @@ static int sixel_render(const SixelFrame& frame, const SixelFit& fit, bool home 
     scratch.band_used.assign((size_t)palette_size, 0);
     scratch.band_colors.clear();
     scratch.band_colors.reserve(palette_size);
+    scratch.band_masks.resize((size_t)palette_size * frame.width);
+    scratch.touched_slots.clear();
+    scratch.touched_slots.reserve((size_t)frame.width * 6);
     std::vector<char>& line = scratch.line;
     std::vector<uint8_t>& band_used = scratch.band_used;
     std::vector<int>& band_colors = scratch.band_colors;
+    std::vector<uint8_t>& band_masks = scratch.band_masks;
+    std::vector<int>& touched_slots = scratch.touched_slots;
     for (int y0 = 0; y0 < frame.height; y0 += 6) {
         std::fill(band_used.begin(), band_used.end(), 0);
         band_colors.clear();
-        for (int dy = 0; dy < 6; ++dy) {
-            int y = y0 + dy;
-            if (y >= frame.height) break;
-            const uint8_t* row = pixels.data() + (size_t)y * frame.width;
-            for (int x = 0; x < frame.width; ++x) {
-                uint8_t color = row[x];
+        touched_slots.clear();
+        for (int x = 0; x < frame.width; ++x) {
+            uint8_t col_colors[6];
+            uint8_t col_bits[6];
+            int col_count = 0;
+            for (int dy = 0; dy < 6; ++dy) {
+                int y = y0 + dy;
+                if (y >= frame.height) break;
+                uint8_t color = pixels[(size_t)y * frame.width + x];
+                uint8_t bit = (uint8_t)(1 << dy);
+
+                int hit = -1;
+                for (int i = 0; i < col_count; ++i) {
+                    if (col_colors[i] == color) {
+                        hit = i;
+                        break;
+                    }
+                }
+                if (hit >= 0) {
+                    col_bits[hit] |= bit;
+                } else {
+                    col_colors[col_count] = color;
+                    col_bits[col_count] = bit;
+                    ++col_count;
+                }
+            }
+
+            for (int i = 0; i < col_count; ++i) {
+                uint8_t color = col_colors[i];
+                size_t slot = (size_t)color * frame.width + x;
+                if (!band_masks[slot])
+                    touched_slots.push_back((int)slot);
+                band_masks[slot] |= col_bits[i];
                 if (!band_used[color]) {
                     band_used[color] = 1;
                     band_colors.push_back(color);
@@ -425,15 +534,10 @@ static int sixel_render(const SixelFrame& frame, const SixelFit& fit, bool home 
         for (int color : band_colors) {
             if (!used[color]) continue;
 
+            uint8_t* mask_row = band_masks.data() + (size_t)color * frame.width;
             int last = -1;
             for (int x = 0; x < frame.width; ++x) {
-                int bits = 0;
-                for (int dy = 0; dy < 6; ++dy) {
-                    int y = y0 + dy;
-                    if (y >= frame.height) break;
-                    if (pixels[(size_t)y * frame.width + x] == color)
-                        bits |= (1 << dy);
-                }
+                int bits = mask_row[x];
                 line[x] = (char)(63 + bits);
                 if (bits) last = x;
             }
@@ -463,6 +567,8 @@ static int sixel_render(const SixelFrame& frame, const SixelFit& fit, bool home 
             if (run_count > 0)
                 sixel_push_run(buf, run_count, run_ch);
         }
+        for (int slot : touched_slots)
+            band_masks[(size_t)slot] = 0;
         buf += '-';
     }
 
@@ -470,4 +576,9 @@ static int sixel_render(const SixelFrame& frame, const SixelFit& fit, bool home 
     DWORD written = 0;
     WriteFile(out_h, buf.data(), (DWORD)buf.size(), &written, nullptr);
     return 0;
+}
+
+static int sixel_render(const SixelFrame& frame, const SixelFit& fit, bool home = false) {
+    SixelRenderOptions opts = { 256, true, home, 1 };
+    return sixel_render(frame, fit, opts);
 }

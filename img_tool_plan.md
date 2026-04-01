@@ -1,263 +1,265 @@
-# Img Tool Plan
+# Img / Vid Handoff
 
-## Architecture Override
+## Current Architecture
 
-This plan now follows this structure:
+This is the intended structure and it should stay this way:
 
-- `cat` keeps the old image and video behavior exactly as it works today
-- `cat` image/video rendering remains the old ANSI block / square-cell path
-- move the old `cat` image/video implementation into `src/cat.h`
-- remove `src/image.h` and `src/video.h`
-- create `src/img.h` for the new still-image tool
-- create `src/vid.h` for the future video tool
-- keep shared low-level SIXEL code in `src/sixel.h`
+- `src/cat.h`
+  - legacy image and video rendering
+  - ANSI / truecolor block-cell path
+  - should remain the old `cat` behavior
+- `src/img.h`
+  - new still-image command
+  - SIXEL-based
+- `src/vid.h`
+  - new video command
+  - SIXEL-based
+- `src/sixel.h`
+  - shared low-level SIXEL fitting / quantization / encoding
+- `src/terminal.h`
+  - shared terminal geometry assumptions used by both legacy `cat` and SIXEL tools
 
 Boundary rule:
-- do not mix new `img` / `vid` architecture back into old `cat` modules
-- `cat` stays legacy-rendered
-- `img` and `vid` are the SIXEL-based tools
 
-## Goal
+- do not move SIXEL logic into `cat`
+- do not make `cat` silently switch to SIXEL
+- `cat` must stay the legacy renderer
+- `img` and `vid` are the explicit SIXEL tools
 
-Add a built-in `img` command that can display real images directly in supported terminals.
+## What Exists Now
 
-Main target:
-- Windows Terminal with SIXEL support
+Implemented and working:
 
-Secondary target:
-- fallback gracefully in terminals that do not support SIXEL
-
-## Current Opinion
-
-Best first version:
-- add a new `img` command
-- keep existing `cat` image behavior unchanged for now
-- reuse the current decode + fit logic from `src/image.h`
-- add a SIXEL output path for Windows Terminal
-- fall back to the existing block-based renderer when SIXEL is not available
-
-Why this seems best:
-- low risk to existing `cat`
-- easiest way to compare old vs new rendering
-- Zcmd already has image loading and terminal-fit logic
-- Windows Terminal now supports SIXEL, so this is a real feature path, not a hack
-
-## Why Not Replace `cat` Immediately
-
-Reasons to keep `cat` unchanged at first:
-- `cat` already has established behavior
-- terminal support is uneven across hosts
-- fallback and capability detection should be proven first
-- `img` gives a clearer user-facing command for image display
-
-If the new path works well later, we can decide whether:
-- `cat` should delegate to `img`
-- or `cat` should keep the current ANSI block renderer
-
-## Known Technical Basis
-
-Current image implementation:
-- `src/image.h`
-- `cat_image(...)` already decodes images with `stb_image`
-- current renderer uses 2x2 block quantization with truecolor ANSI
-
-Useful existing pieces:
-- image decode
-- terminal size query
-- aspect-ratio fitting
-- direct output to `out_h`
-
-Missing piece:
-- SIXEL encoder / writer
-
-## Proposed First Implementation
-
-### Command
-
-Add a new built-in:
 - `img <path>`
+  - loads with `stb_image`
+  - fits to terminal
+  - renders through internal SIXEL encoder
+  - good image quality after adaptive palette + dithering work
+- `vid <path>`
+  - probes video with `ffprobe`
+  - decodes scaled RGB frames through `ffmpeg`
+  - renders frames through a faster SIXEL profile
+  - works, but frame rate is still the weak point
+- `cat`
+  - still renders images/videos the old way
+  - now shares the same terminal-geometry assumptions as the new tools
 
-Possible future flags:
-- `img --fit <path>`
-- `img --width N <path>`
-- `img --no-fallback <path>`
+Integrated shell UX:
 
-But first version should stay minimal:
-- just `img <path>`
+- help text updated in `zcmd.cpp`
+- built-in command recognition updated in `src/commands.h`
+- path hinting exists for `img`
+- `vid` command wiring exists
 
-### Behavior
+## Files To Read First
 
-Preferred behavior:
-1. load image
-2. fit it to terminal size
-3. if SIXEL is supported, render with SIXEL
-4. otherwise fall back to current block renderer
+If another agent takes over, read these in this order:
 
-Alternative stricter behavior:
-- if SIXEL is unavailable, print a message and exit
+1. `src/sixel.h`
+2. `src/img.h`
+3. `src/vid.h`
+4. `src/terminal.h`
+5. `src/cat.h`
+6. `zcmd.cpp`
+7. `src/commands.h`
 
-Current preference:
-- fallback is better for first version
+Reason:
 
-## Architecture Suggestion
+- `src/sixel.h` is the core technology and the most important file
+- `src/img.h` shows the high-quality still-image path
+- `src/vid.h` shows the current fast-video attempt
+- `src/terminal.h` explains the current aspect correction model
+- `src/cat.h` matters because we must not regress the legacy path
 
-Keep this split:
+## Technology Behind It
 
-- `src/image.h`
-  - shared decode / fit helpers
-  - existing block renderer
+Image side:
 
-- new module, likely `src/img.h`
-  - `img_cmd(...)`
-  - SIXEL-specific rendering path
-  - host/capability checks
+- `stb_image` for still-image decode
+- internal nearest-neighbor resize in `src/img.h`
+- internal SIXEL encoder in `src/sixel.h`
 
-Possible helper split:
-- `img_load(...)`
-- `img_fit(...)`
-- `img_render_blocks(...)`
-- `img_render_sixel(...)`
+Video side:
 
-This keeps the output strategies separate while reusing image preparation.
+- `ffprobe` to read dimensions / duration
+- `ffmpeg` to decode and scale raw RGB frames
+- internal SIXEL frame renderer reused from `src/sixel.h`
 
-## Capability Detection Ideas
+Rendering approach:
 
-This part needs care.
+- adaptive palette quantization
+- median-cut style palette generation from a 32x32x32 histogram
+- nearest-color lookup cache
+- Floyd-Steinberg dithering for `img`
+- no dithering for `vid`
+- SIXEL row-band encoder with reusable scratch buffers
 
-Possible approaches:
+## Terminal Geometry / Aspect Work
 
-1. optimistic Windows Terminal path
-- detect likely Windows Terminal session through environment variables
-- if detected, try SIXEL
-- otherwise use fallback
+This was a major part of the session.
 
-2. explicit flag
-- require something like `img --sixel`
-- simplest and safest
-- less convenient
+Important reality:
 
-3. hybrid
-- try host detection first
-- keep an override later if needed
+- Windows Terminal does not expose reliable app-side pixel introspection for this
+- SIXEL aspect hints alone were not enough
+- terminal `cell width` and `line height` settings visibly affect rendered aspect
 
-Current opinion:
-- start with a simple Windows Terminal detection heuristic
-- still keep fallback
+Current model:
 
-Possible things to inspect later:
-- `WT_SESSION`
-- terminal-identifying env vars
-- whether a better Windows host capability signal exists
+- temporary hardcoded terminal settings live in `src/terminal.h`
+- `term_cell_width_setting()`
+- `term_line_height_setting()`
+- `term_cell_aspect()`
+- `term_sixel_width_scale()`
 
-## SIXEL Encoder Scope
+Current calibrated values:
 
-There are two paths:
+- `cell width = 0.60`
+- `line height = 1.00`
+- calibrated SIXEL baseline constant in `term_sixel_width_scale()` is `0.52`
 
-### Simple internal encoder
+Why this matters:
 
-Pros:
-- no new dependency
-- fully native to project
-- easiest to ship
+- `img` depends on it for correct SIXEL width fitting
+- `cat_image` and `cat_video` now also depend on the shared geometry model
+- later, when a real config/runtime value is added, both old and new paths should move together
 
-Cons:
-- more implementation work
-- palette/compression quality may be basic at first
+## What Was Tried And Worked
 
-### External tool integration
+For `img` quality:
 
-Use a tool like:
-- `img2sixel`
-- `chafa`
+- moved away from a fixed cube palette
+- adaptive palette + dithering made a big visible difference
+- current `img` quality is considered good and should be preserved
 
-Pros:
-- faster to prototype
-- mature encoding quality
+For `img` speed:
 
-Cons:
-- adds external dependency expectations
-- conflicts with current project preference to avoid extra dependencies
+- reusable scratch buffers
+- rolling-row dithering instead of a full float image buffer
+- lazy nearest-color lookup cache
+- reusable histogram scratch
+- improved SIXEL band encoder that avoids repeated rescans
 
-Current opinion:
-- internal encoder is the right long-term fit
-- but researching external output first could help verify expected SIXEL behavior and escape format
+Result:
 
-## Research Questions
+- `img` became much faster
+- fullscreen still-image rendering is around acceptable territory
+- do not casually replace the current `img` pipeline
 
-Things worth researching in a future session:
+For aspect correction:
 
-1. What is the smallest useful SIXEL encoder we can write ourselves?
-- palette size
-- row encoding
-- run-length usage
-- image quality tradeoffs
+- explicit SIXEL square-pixel header alone was not enough
+- calibration against terminal `cell width` / `line height` worked
+- tested combinations visually:
+  - `cell width 0.6 / line height 1.0`
+  - `cell width 1.0 / line height 1.0`
+  - `cell width 0.6 / line height 0.6`
 
-2. What terminals we should officially support?
-- Windows Terminal
-- conhost
-- VSCode integrated terminal
-- SSH / remote sessions
+For `vid`:
 
-3. What is the correct host detection strategy?
-- environment variables
-- terminal responses
-- opt-in flag
+- separate fast render options in `src/sixel.h`
+- fewer colors than `img`
+- no dithering
+- palette reuse across nearby frames
+- command is usable now
 
-4. Should Zcmd keep truecolor block rendering as permanent fallback?
-- likely yes
+## What Was Tried And Did Not Help
 
-5. Should `img` support animation later?
-- probably not first
-- static images first
+Important failed or weak directions:
 
-6. Should `play` / `video` ever use SIXEL frames?
-- possible in theory
-- probably too heavy for first pass
+- forcing SIXEL support everywhere
+  - VS Code terminal still did not render it
+  - keep real support checks
+- relying only on SIXEL header aspect metadata
+  - Windows Terminal still looked stretched
+- making `vid` quality much worse by dropping colors too far
+  - quality got bad
+  - frame rate did not really improve
+- shrinking `vid` below available free space
+  - this was rejected by the user as cheating
+  - `vid` must use available free space
 
-## Suggested Research Steps
+Conclusion:
 
-Recommended order:
+- the remaining `vid` bottleneck is probably not just palette quality
+- likely major costs are SIXEL encode size and terminal write throughput
 
-1. confirm Windows Terminal SIXEL behavior with a known-good encoder
-- example: `img2sixel`
-- validate sizing, scrolling, and cursor behavior
+## What Must Not Be Damaged
 
-2. inspect escape output from a known-good SIXEL tool
-- understand structure of emitted stream
+Very important:
 
-3. implement a very small internal prototype
-- fixed palette
-- simple row output
-- no fancy compression first
+- do not ruin the current `img` color quality
+- do not remove adaptive palette + dithering from `img`
+- do not break the current aspect calibration model
+- do not make `cat` depend on SIXEL
+- do not change `cat` semantics
+- do not silently shrink `vid` below the available free space
+- do not degrade `img` just to help `vid`
 
-4. compare:
-- image quality
-- speed
-- terminal behavior
+Practical rule:
 
-5. only then integrate into a real `img` command
+- `img` is the high-quality still-image path
+- `vid` should be a separate performance-tuned profile
+- shared code in `src/sixel.h` must support both without forcing one compromise onto the other
 
-## Risks
+## Current Weak Point
 
-Main risks:
-- terminal support inconsistency
-- performance on large images
-- poor palette/quantization quality in a naive encoder
-- scrolling/cursor placement weirdness after image output
+The main remaining problem is `vid` frame rate.
 
-Things to test carefully:
-- prompt restoration after image output
-- resize behavior
-- large image scaling
-- narrow terminal widths
-- fallback path correctness
+Current state:
 
-## Recommendation For Next Session
+- works
+- quality is acceptable again
+- frame rate is still too low
 
-Best next session goal:
-- do research + prototype only
-- do not fully integrate into `cat`
-- aim for a minimal `img` command proof of concept
+Most likely next honest step:
+
+- add timing instrumentation for `vid` only
+- measure:
+  - ffmpeg decode
+  - quantize
+  - SIXEL encode
+  - terminal write
+  - sleep
+
+Without this, further changes are too guessy.
+
+## Recommended Next Task For Claude
+
+Suggested objective:
+
+- improve `vid` frame rate without degrading `img`
+
+Recommended approach:
+
+1. read the files listed above
+2. understand that `img` quality is considered solved
+3. add optional profiling/timing for `vid`
+4. identify whether the real wall is:
+   - quantization
+   - SIXEL encoding
+   - terminal output volume
+5. optimize only the measured bottleneck
+
+Possible future directions, but only after measurement:
+
+- frame differencing / changed-region updates
+- lower-overhead video palette strategy
+- better write batching / output reduction
+- reuse more state frame-to-frame
+
+## Short Instruction To Future Agent
+
+The project now has a working high-quality `img` pipeline and a working but still-slow `vid` pipeline.
+
+Protect these invariants:
+
+- `img` quality should stay visually close to current output
+- `cat` stays legacy-rendered
+- `vid` should not cheat by shrinking below free space
+- terminal aspect correction lives in shared helpers and should stay shared
+
+If you optimize next, optimize `vid` by measurement, not by making `img` worse.
 
 Best success criteria:
 - `img some.png` renders correctly in Windows Terminal
