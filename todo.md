@@ -18,16 +18,14 @@
     . SQL syntax
 
 
-# In VSCode kind of insert mode is activated?
-  I typed git checkout codex-tests
-  Moved cursor to git checkout [here]codex_tests
-  And typed git checkout -Bdex-tests - so it overrited
-
-
-# Do hits always reread folders and collect data every time I type something? If yes can we set a cooldown on it? While path is not changed or while new command is not run
-
 # standard windows commands rm cp mv should be followed with autocomplete also which require path
 
 # view command launch editor in view mode like Explorer uses it
 
 # When execute task from shell which opens new window for example I execute image.jpg, ctrl+C in the terminal does not kill the task or release terminal prompt 
+
+# probably we should disable ghost hint for git commit it is annoyng if command starts at git commit basically I d disable ghost hints for git because it is dangerous, in future there might be commands that also do not need ghost hints nah better idea we can hint git [command] but no further than command idk we need to choose something optimal, hinting already a performance issue and we should be careful
+
+# multiline history entry hinting should we do it? did we intentionally disabled it idk
+
+# vid tool is slow
