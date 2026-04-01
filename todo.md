@@ -26,3 +26,8 @@
 
 # Do hits always reread folders and collect data every time I type something? If yes can we set a cooldown on it? While path is not changed or while new command is not run
 
+# standard windows commands rm cp mv should be followed with autocomplete also which require path
+
+# view command launch editor in view mode like Explorer uses it
+
+# When execute task from shell which opens new window for example I execute image.jpg, ctrl+C in the terminal does not kill the task or release terminal prompt 

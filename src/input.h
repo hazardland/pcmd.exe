@@ -195,6 +195,13 @@ void find_hint(input& e) {
             e.hint = matches[0].substr(token.size());
         return;
     }
+    if (lower.size() >= 4 && lower.substr(0, 4) == L"img ") {
+        std::wstring token = e.buf.substr(4);
+        auto matches = complete_cached(e, token, false);
+        if (!matches.empty() && matches[0].size() > token.size())
+            e.hint = matches[0].substr(token.size());
+        return;
+    }
     if (lower.size() >= 5 && lower.substr(0, 5) == L"edit ") {
         std::wstring token = e.buf.substr(5);
         auto matches = complete_cached(e, token, false);

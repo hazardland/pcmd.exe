@@ -1,5 +1,22 @@
 # Img Tool Plan
 
+## Architecture Override
+
+This plan now follows this structure:
+
+- `cat` keeps the old image and video behavior exactly as it works today
+- `cat` image/video rendering remains the old ANSI block / square-cell path
+- move the old `cat` image/video implementation into `src/cat.h`
+- remove `src/image.h` and `src/video.h`
+- create `src/img.h` for the new still-image tool
+- create `src/vid.h` for the future video tool
+- keep shared low-level SIXEL code in `src/sixel.h`
+
+Boundary rule:
+- do not mix new `img` / `vid` architecture back into old `cat` modules
+- `cat` stays legacy-rendered
+- `img` and `vid` are the SIXEL-based tools
+
 ## Goal
 
 Add a built-in `img` command that can display real images directly in supported terminals.

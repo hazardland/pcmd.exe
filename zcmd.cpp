@@ -16,10 +16,11 @@ void explore_toggle();
 #include "src/persist.h"  // history, aliases, prev_dir (defines append_history used above)
 #include "src/commands.h" // cd, ls, run, run_bash, which, rule
 #include "src/explore.h"  // explore_toggle(), Explore screen-buffer UI
-#include "src/image.h"    // cat_image, imgpush_cell (shared with video.h)
-#include "src/video.h"    // cat_video (uses imgpush_cell from image.h)
 #include "src/highlight.h" // detect_lang, colorize_inline, colorize_line
 #include "src/cat.h"      // cat
+#include "src/sixel.h"    // shared low-level sixel helpers for img/vid
+#include "src/img.h"      // img_cmd()
+#include "src/vid.h"      // vid_cmd()
 #include "src/edit.h"     // edit_file()
 #include "src/matrix.h"  // matrix()
 #include "src/note.h"    // note_cmd()
@@ -188,6 +189,7 @@ int main() {
                 GREEN "cat" RESET "     Print file with syntax highlighting  | grep <word>\r\n"
                 "        Image files (jpg png bmp gif) rendered inline as 24-bit color block art\r\n"
                 "        Video files (mp4 mkv avi mov webm) played inline  Esc/Ctrl+C to stop  requires ffmpeg\r\n"
+                GREEN "img" RESET "     Render image with SIXEL  img path/to/file\r\n"
                 GREEN "edit" RESET "    Edit a file  edit path/to/file\r\n"
                 GREEN "terminfo" RESET " Print terminal columns and rows\r\n"
                 GREEN "matrix" RESET "   Matrix digital rain screensaver  any key to exit\r\n"
@@ -319,6 +321,11 @@ int main() {
         if (lower == "pwd") {
             out(cwd() + "\r\n");
             last_code = 0;
+            continue;
+        }
+
+        if (lower == "img" || (lower.size() >= 4 && lower.substr(0, 4) == "img ")) {
+            last_code = img_cmd(line);
             continue;
         }
 
