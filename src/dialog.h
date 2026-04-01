@@ -135,6 +135,7 @@ static DialogPalette dialog_palette_warning() {
     DialogPalette palette = dialog_palette_default();
     palette.border_fg = 203;
     palette.title_fg = 203;
+    palette.title_bg = -1;
     return palette;
 }
 
@@ -369,6 +370,15 @@ static void dialog_draw(std::vector<wchar_t>& chars, std::vector<WORD>& attrs, i
 
     int left = std::max(0, (width - dialog_w) / 2);
     int top  = std::max(0, (height - dialog_h) / 2);
+
+    // Clear a moat around the dialog so underlying tool chrome stays visually separated.
+    int clear_left = std::max(0, left - 2);
+    int clear_top = std::max(0, top - 2);
+    int clear_right = std::min(width - 1, left + dialog_w + 1);
+    int clear_bottom = std::min(height - 1, top + dialog_h + 1);
+    for (int y = clear_top; y <= clear_bottom; y++)
+        dialog_fill(chars, attrs, width, height, clear_left, y, clear_right - clear_left + 1, L' ', DIALOG_STYLE_FILL);
+
     dialog_box(chars, attrs, width, height, left, top, dialog_w, dialog_h, DIALOG_STYLE_BORDER, DIALOG_STYLE_FILL);
 
     dialog_text(chars, attrs, width, height, left + 2, top, dialog_fit(dialog.title, dialog_w - 4), DIALOG_STYLE_TITLE);

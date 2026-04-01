@@ -243,6 +243,13 @@ static bool explore_dialog_focused() {
     return g_explore.focus == EXPLORER_FOCUS_DIALOG && g_explore.dialog.visible;
 }
 
+static void explore_invalidate_render() {
+    g_explore.prev_width = 0;
+    g_explore.prev_height = 0;
+    g_explore.prev_chars.clear();
+    g_explore.prev_attrs.clear();
+}
+
 static bool explore_read_view_size(int& width, int& height) {
     width = term_width();
     height = term_height();
@@ -1013,6 +1020,7 @@ static void explore_dialog_begin(EXPLORER_DIALOG_KIND kind) {
     g_explore.focus = EXPLORER_FOCUS_DIALOG;
     g_explore.filter_replace = false;
     g_explore.dialog_kind = kind;
+    explore_invalidate_render();
 }
 
 // Explorer decides when to open a dialog and what each button means.
@@ -1134,7 +1142,8 @@ static void explore_delete_dialog_open(bool recycle) {
         {
             dialog_button(EXPLORER_DIALOG_BUTTON_OK, L"ENTER", recycle ? L"Recycle" : L"Delete", DIALOG_BUTTON_CAUTION, VK_RETURN),
             dialog_button(EXPLORER_DIALOG_BUTTON_CANCEL, L"ESC", L"Cancel", DIALOG_BUTTON_CANCEL, VK_ESCAPE),
-        });
+        },
+        dialog_palette_warning());
 }
 
 static void explore_info_dialog_open(const std::wstring& title, const std::wstring& summary, const std::wstring& detail) {
@@ -1165,6 +1174,7 @@ static void explore_dialog_close() {
     dialog_close(g_explore.dialog);
     g_explore.dialog_kind = EXPLORER_DIALOG_NONE;
     g_explore.focus = EXPLORER_FOCUS_PANEL;
+    explore_invalidate_render();
 }
 
 static void explore_dialog_cancel() {
