@@ -756,6 +756,8 @@ std::string readline(input& e) {
         }
 
         if (ch >= 32 && ch != 127) {
+            bool typed_at_end = (e.pos == (int)e.buf.size());
+            bool had_nav_hint = (e.hist_idx != -1 || !e.hint.empty());
             if (e.hist_idx != -1 && !e.hint.empty()) { e.buf += e.hint; }
             e.hist_idx = -1;
             e.plain_nav = false;
@@ -764,7 +766,11 @@ std::string readline(input& e) {
             find_hint(e);
             DWORD nevents = 0;
             GetNumberOfConsoleInputEvents(in_h, &nevents);
-            if (nevents > 0) {
+            // Single-char paint is only safe for plain end-of-line typing.
+            // Mid-line edits or hint/nav transitions need a full redraw or some hosts
+            // (notably VSCode/ConPTY) can look like overtype mode.
+            bool fast_paint = typed_at_end && !had_nav_hint && e.hint.empty();
+            if (fast_paint && nevents > 0) {
                 e.cursor_row = phys_rows(e.buf, e.pos, e.prompt_vis, term_width());
                 out(to_utf8(std::wstring(1, ch)));
             } else {
