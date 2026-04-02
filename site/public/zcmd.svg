@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Zcmd</title>
+  <desc id="desc">Zcmd icon</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#232833" />
+      <stop offset="100%" stop-color="#2d3240" />
+    </linearGradient>
+    <linearGradient id="stroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#74ade8" />
+      <stop offset="100%" stop-color="#b477cf" />
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bg)" stroke="url(#stroke)" stroke-width="4" />
+  <text x="25" y="74" fill="#edf1f5" font-family="Consolas, 'Courier New', monospace" font-size="34" font-weight="700">[z&gt;]</text>
+</svg>

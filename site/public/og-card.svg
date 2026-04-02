@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Zcmd</title>
+  <desc id="desc">Portable Windows shell replacement for cmd.exe and PowerShell.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e222a" />
+      <stop offset="55%" stop-color="#282c33" />
+      <stop offset="100%" stop-color="#20242c" />
+    </linearGradient>
+    <linearGradient id="stroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#74ade8" />
+      <stop offset="100%" stop-color="#b477cf" />
+    </linearGradient>
+    <radialGradient id="glowBlue" cx="85%" cy="24%" r="44%">
+      <stop offset="0%" stop-color="#74ade8" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#74ade8" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="glowPurple" cx="70%" cy="72%" r="38%">
+      <stop offset="0%" stop-color="#b477cf" stop-opacity="0.18" />
+      <stop offset="100%" stop-color="#b477cf" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)" />
+  <rect width="1200" height="630" fill="url(#glowBlue)" />
+  <rect width="1200" height="630" fill="url(#glowPurple)" />
+  <rect x="56" y="56" width="1088" height="72" rx="24" fill="#252a35" stroke="url(#stroke)" stroke-opacity="0.42" />
+  <text x="90" y="101" fill="#edf1f5" font-family="Consolas, 'Courier New', monospace" font-size="28" font-weight="700">[zcmd]&gt;</text>
+  <text x="220" y="98" fill="#edf1f5" font-family="Bahnschrift, 'Segoe UI', sans-serif" font-size="28" font-weight="700">ZCMD</text>
+  <text x="220" y="126" fill="#8c91a0" font-family="Bahnschrift, 'Segoe UI', sans-serif" font-size="17" letter-spacing="2">PORTABLE WINDOWS SHELL</text>
+  <text x="78" y="235" fill="#ffd885" font-family="Bahnschrift, 'Segoe UI', sans-serif" font-size="18" font-weight="700" letter-spacing="4">WINDOWS SHELL REPLACEMENT</text>
+  <text x="78" y="330" fill="#edf1f5" font-family="Bahnschrift, 'Segoe UI', sans-serif" font-size="72" font-weight="700">Portable, single executable,</text>
+  <text x="78" y="412" fill="#edf1f5" font-family="Bahnschrift, 'Segoe UI', sans-serif" font-size="72" font-weight="700">zero config shell replacement</text>
+  <text x="78" y="494" fill="#edf1f5" font-family="Bahnschrift, 'Segoe UI', sans-serif" font-size="72" font-weight="700">for cmd.exe and PowerShell.</text>
+  <text x="78" y="566" fill="#abb2bf" font-family="Bahnschrift, 'Segoe UI', sans-serif" font-size="28">Performance first. Built-in tools. Made for Windows developers.</text>
+</svg>

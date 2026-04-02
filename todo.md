@@ -30,3 +30,11 @@
 - Operation cancel/resume on mid copy or move between disks with progress functions (?)
 
 # I like VSCode terminal color scheme any chance we make it permanent? Zed One Theme Dark
+
+# Far had cool featue u could enter archives like folder and copy from them and copy to them
+
+# Publush site
+
+# Think about klad1 port
+
+Bug [05:47:08.68]src> v[id| kling_20260326_作品__1362_0 (1).mp4] on v I pressed delete when there rest was hint and cursor moved to end of the id
